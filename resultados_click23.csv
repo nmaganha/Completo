@@ -1,4 +1,10 @@
-﻿nome,data_hora,acertos,total,percentual
-Paulo,08/09/2026 09:04:39,7,10,70.0
-Nivaldo Maganha,08/09/2026 14:11:52,9,10,90.0
-Beltrano,09/09/2026 09:02:17,7,10,70.0
+﻿nome,data_hora_inicio,data_hora_fim,tempo_execucao,assunto_selecionado,acertos,total,percentual
+nmaganha,14/09/2026 09:11:42,14/09/2026 09:12:41,00:00:59,Ac_Operativos,3,10,30.0
+nmaganha,14/09/2026 09:16:41,14/09/2026 09:17:49,00:01:07,Ac_Operativos,4,10,40.0
+nmaganha,14/09/2026 09:21:45,14/09/2026 09:22:50,00:01:05,TODAS,5,10,50.0
+nmaganha,14/09/2026 14:42:58,14/09/2026 14:44:20,00:01:21,C_Continua,7,10,70.0
+nmaganha,14/09/2026 14:59:46,14/09/2026 15:02:10,00:02:24,C_Continua,5,10,50.0
+nmaganha,14/09/2026 17:17:58,14/09/2026 17:18:39,00:00:41,C_Alternada,1,10,10.0
+nmaganha,15/09/2026 09:59:15,15/09/2026 09:59:58,00:00:43,C_Alternada,4,10,40.0
+nmaganha,15/09/2026 10:57:42,15/09/2026 10:58:24,00:00:42,Ac_Operativos,0,10,0.0
+nmaganha,15/09/2026 10:59:49,15/09/2026 11:00:34,00:00:44,IOs_ONS,3,10,30.0
