@@ -177,3 +177,60 @@ C_Continua;TODAS;Como é obtida a potência elétrica?;Pelo produto da tensão p
 C_Continua;TODAS;Supondo que um gerador permaneceu fornecendo uma potência média de 50 MW durante 3 horas. Calcule a energia gerada nesse período.;150 MWh;50 MWh;53 MWh;25 MWh;A
 C_Continua;TODAS;Supondo que um gerador permaneceu fornecendo uma potência média de 10 MW durante 24 horas. Calcule a energia gerada nesse período.;240 MWh;24 MWh;420 MWh;42 MWh;A
 C_Continua;TODAS;Durante um mês composto de 30 dias (720 horas) um sistema que utiliza a eletricidade como fonte, utiliza uma potência média de 2 W. Calcule a energia elétrica consumida por esse sistema.;1,44 kWh;1700 MWh;7,2 kWh;2 kWh;A
+C_Alternada;TODAS;Corrente alternada é uma corrente variável que percorre os condutores tanto em um quanto em outro sentido.;Corrente alternada é uma corrente variável que percorre os condutores apenas em um sentido.;Corrente alternada é uma corrente não variável que percorre os condutores tanto em um quanto em outro sentido.;Corrente alternada é uma corrente variável que não percorre os condutores.;A
+C_Alternada;TODAS;Como é chamada a variação completa da corrente em um sentido ou em outro?;Amplitude;Período;Alternância;Valor instantâneo;C
+C_Alternada;TODAS;Assinale a alternativa que representa os três tipos de cargas que podem existir em um circuito de corrente alternada.;Resistiva, Indutiva e Pesada;Resistiva, Indutiva e Capacitiva;Indutiva, Capacitiva e Leve;Capacitiva, Transitória e Resistiva;B
+C_Alternada;TODAS;Assinale a alternativa que possui apenas cargas resistivas.;Ferro elétrico, bobina e motor elétrico;Motor elétrico, chuveiro elétrico e aquecedor elétrico;Bobina, chuveiro elétrico e ferro elétrico;Chuveiro elétrico, ferro elétrico e aquecedor elétrico;D
+C_Alternada;TODAS;Cargas indutivas são aquelas que, quando percorridas por uma corrente alternada, criam um campo magnético. Assinale se a afirmação é verdadeira ou falsa.;Verdadeira;Falsa; ; ;A
+C_Alternada;TODAS;Qual o tipo de carga que em corrente alternada possuem apenas capacitores?;Resistiva;Capacitiva;Indutiva;Mista;B
+C_Alternada;TODAS;Qual o tipo de carga que em corrente alternada possuem apenas indutores?;Indutiva;Resistiva;Capacitiva;Mista;A
+C_Alternada;TODAS;Qual o tipo de carga que em corrente alternada possuem apenas resistores?;Indutiva;Capacitiva;Mista;Resistiva;D
+C_Alternada;TODAS;Quantos ciclos por segundo apresenta uma frequência de 60 Hz?;30 ciclos por segundo;6 ciclos por segundo;60 ciclos por segundo;3 ciclos por segundo;C
+C_Alternada;TODAS;A frequência é exprimida em qual unidade de medida?;Ampére;Hertz;Volt;Faraday;B
+C_Alternada;TODAS;É correta a afirmação de que em um circuito puramente resistivo, a tensão e a corrente estão em fase?;Verdadeiro;Falso; ; ;A
+C_Alternada;TODAS;Qual o ângulo de defasagem da tensão em relação a corrente em um circuito em série puramente indutivo?;90° adiantada;90° atrasada;45° atrasada;Está em fase;A
+C_Alternada;TODAS;Qual o ângulo de defasagem da tensão em relação a corrente em um circuito em série puramente capacitivo?;90° adiantada;90° atrasada;45° adiantada;Está em fase;B
+C_Alternada;TODAS;Como é chamada a oposição oferecida à passagem de corrente alternada por um capacitor ou indutor?;Admitância;Impedância;Resistência;Reatância;D
+C_Alternada;TODAS;Qual a unidade de medida utilizada para exprimir a reatância indutiva ou capacitiva?;Watt;Ampére;Ohm;Volt;C
+C_Alternada;TODAS;Como é chamada a oposição total do circuito à passagem de corrente alterna em um circuito com cargas RL, RC ou RLC?;Reatância;Impedância;Admitância;Ressonância;B
+C_Alternada;TODAS;Quais os principais componentes de um circuito RL?;Capacitor e resistência;Indutor e capacitor;Apenas resistência;Resistência e indutor;D
+C_Alternada;TODAS;Quais os principais componentes de um circuito RC?;Capacitor e indutor;Indutor e capacitor;Resistência e capacitor;Apenas capacitor;C
+C_Alternada;TODAS;Quais os principais componentes de um circuito LC?;Indutor e capacitor;Capacitor e resistência;Indutor e resistência;Apenas indutor;A
+C_Alternada;TODAS;Quais os principais componentes de um circuito RLC?;Capacitor, resistência e transistor;Resistência, indutor e capacitor;Indutor e capacitor;Apenas resistência;B
+C_Alternada;TODAS;Como são chamados os circuitos compostos por reatâncias capacitivas e indutivas de valores iguais?;Resistentes;Capacitivos;Indutivos;Ressonantes;D
+C_Alternada;TODAS;Qual a principal utilização dos circuitos ressonantes?;Filtro de frequência;Filtro de tensão;Filtro de corrente;Filtro de potência;A
+C_Alternada;TODAS;Dado um circuito composto por uma carga indutiva XL igual a 15 e uma carga capacitiva XC igual a 15. Responda qual a característica do circuito apresentado.;Predominante capacitivo;Ressonante;Predominante indutivo;Puramente resistivo;B
+C_Alternada;TODAS;Qual a unidade de medida utilizada para exprimir a Potência Ativa?;Volt-ampère (VA);Volt (V);Watt (W);Ampére (A);C
+C_Alternada;TODAS;Qual a unidade de medida utilizada para exprimir a Potência Reativa?;Volt-ampère-reativo (VAr);Volt (V);Ampére (A);Watt (W);A
+C_Alternada;TODAS;Qual a unidade utilizada para exprimir a Potência Aparente?;Ampere;Volt-ampere;Ohm;Watts;B
+C_Alternada;TODAS;Qual a simbologia utilizada para representar a Potência Aparente?;P;Q;S;I;C
+C_Alternada;TODAS;Qual a simbologia utilizada para representar a Potência Ativa?;P;Q;S;I;A
+C_Alternada;TODAS;Qual a simbologia utilizada para representar a Potência Reativa?;S;P;I;Q;D
+C_Alternada;TODAS;O capacitor não consome potência ativa. Essa afirmação é verdadeira ou falsa?;Verdadeira;Falsa; ; ;A
+C_Alternada;TODAS;O que o fator de potência representa?;A porcentagem da potência ativa que não foi transformada em trabalho;A porcentagem da potência reativa que foi transformada em trabalho;A porcentagem da potência aparente que foi efetivamente transformada em trabalho;A porcentagem da potência aparente que não foi transformada em trabalho;C
+C_Alternada;TODAS;É correto afirmar que o fator de potência é dado pela relação entre potência ativa e a potência reativa?;Verdadeiro;Falso; ; ;B
+C_Alternada;TODAS;Dado um circuito elétrico com potência aparente (S) igual a 100VA e potência ativa (P) igual a 95W. Calcule o fator de potência.;0,95;0,90;0,85;0,93;A
+C_Alternada;TODAS;O que são tensões simples em um sistema trifásico?;Tensões obtidas entre duas fases;Tensões obtidas pela soma das fases;Tensões obtidas entre uma fase e o neutro;Tensões obtidas pela somadas fases e o neutro;C
+C_Alternada;TODAS;O que são tensões compostas em um sistema trifásico?;Tensões obtidas pela soma das fases;Tensões obtidas pela somadas fases e o neutro;Tensões obtidas entre uma fase e o neutro;Tensões obtidas entre duas fases;D
+C_Alternada;TODAS;Como é chamada a tensão medida entre fases em uma ligação estrela?;Tensão fase e neutro;Tensão nominal;Tensão auxiliar;Tensão de linha;D
+C_Alternada;TODAS;Como é chamada a tensão medida entre fase e neutro em uma ligação estrela?;Tensão fase e neutro;Tensão nominal;Tensão de linha;Tensão auxiliar;A
+C_Alternada;TODAS;É correto afirmar que em sistema estrela equilibrado, a corrente que circula no neutro é igual a zero?;Verdadeiro;Falso; ; ;A
+C_Alternada;TODAS;É correto afirmar que em sistema estrela desequilibrado, a corrente que circula no neutro é igual a zero?;Verdadeiro;Falso; ; ;B
+C_Alternada;TODAS;É correto afirmar que em um sistema estrela desequilibrado, as fases que estiverem com menor carga sofrerão sobretensões?;Verdadeiro;Falso; ; ;A
+C_Alternada;TODAS;É correto afirmar que em um sistema triângulo equilibrado, as tensões aplicadas nas cargas possuem valores diferentes às tensões de fase?;Verdadeiro;Falso; ; ;B
+C_Alternada;TODAS;Como é obtida a corrente de fase em um sistema triângulo?;Através da soma das tensões de carga;Através da divisão entre tensão e corrente de carga;Através da diferença vetorial entre duas correntes de carga;Através da soma de todas as correntes de carga;C
+C_Alternada;TODAS;Quando podemos considerar o sistema estrela desequilibrado?;Quando não há uma diferença no número de cargas;Quando há uma diferença no número de cargas apenas na fase A;Quando há uma diferença no número de cargas apenas na fase B;Quando há uma diferença no número de cargas em qualquer uma das fases;D
+C_Alternada;TODAS;Como é chamado o ponto comum das três cargas em um sistema estrela?;Ponto neutro artificial;Ponto neutro natural;Ponto neutro tridimensional;Ponto neutro fasorial;A
+C_Alternada;TODAS;Qual o valor de potencial do neutro artificial?;O mesmo do condutor da fase A;O mesmo do condutor neutro;O mesmo dos condutores das fases A e B;O mesmo dos condutores das fases A, B e C;B
+C_Alternada;TODAS;É correto afirmar que em uma ligação triângulo desequilibrada, quando há alteração do valor de uma corrente de carga este acarretará variação do valor de duas correntes de fase?;Verdadeiro;Falso; ; ;A
+C_Alternada;TODAS;Considerando um sistema onde o valor do fator de potência está abaixo do menor valor estipulado, assinale a melhor alternativa para corrigir o fator de potência desse sistema?;Banco de baterias;Banco de resistores;Banco de capacitores;Banco de transformadores;C
+C_Alternada;TODAS;Em um circuito com potência ativa (P) igual a 100W e potência reativa (Q) igual a 40VAr. Calcule a potência aparente.;110 VA;120,15 VA;140 VA;107,70 VA;D
+C_Alternada;TODAS;Em um circuito com potência ativa (P) igual a 120W e potência reativa (Q) igual a 20VAr. Calcule a potência aparente.;121,65 VA;100 VA;120,20 VA;122,13 VA;A
+C_Alternada;TODAS;Em um circuito com potência aparente (S) igual a 110VA e potência reativa (Q) igual a 40VAr. Calcule a potência ativa.;100,32 W;102,47 W;201,31 W;84,72 W;B
+C_Alternada;TODAS;Em um circuito com potência aparente (S) igual a 100VA e potência reativa (Q) igual a 10VAr. Calcule a potência ativa.;100,50;50,50;99,50;89,50;C
+C_Alternada;TODAS;Em um circuito com potência aparente (S) igual a 110VA e potência ativa (P) igual a 100W. Calcule a potência reativa.;45,82 Var;43,78 Var;60,15 Var;10 Var;A
+C_Alternada;TODAS;Em um circuito com potência aparente (S) igual a 100VA e potência ativa (P) igual a 90W. Calcule a potência reativa.;45,85 Var;43,59 Var;44,26 Var;55,85 Var;B
+C_Alternada;TODAS;Assinale a alternativa que contém a correta fórmula para o cálculo da potência aparente:;S=P+Q;S²=P²+Q²;S^2=P²-Q²;S=P-Q;B
+C_Alternada;TODAS;Em um sistema trifásico, qual o resultado da relação entre a tensão simples e a tensão composta?;√3;√2;√3²;√2²;A
+
+

@@ -1,4 +1,4 @@
-# Código atualizado em 13-09-26 – 22,20 (Inclusão do Click_23)
+# Código atualizado em 14-09-26 – 21,22 (Inclusão do Click_23)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8560,6 +8560,15 @@ def carregar_questoes():
     df = pd.read_csv(QUESTOES_CSV, sep=SEPARADOR_CSV_QUESTOES, encoding="utf-8-sig")
     return df.to_dict(orient="records")
 
+def opcao_preenchida(valor):
+    """Indica se uma célula de alternativa (opcao_a..d) tem conteúdo real.
+
+    Permite questões de Verdadeiro/Falso (só A e B) ou de 3 alternativas (A, B e C),
+    deixando opcao_c e/ou opcao_d em branco (ou só com espaço) no CSV."""
+    if valor is None:
+        return False
+    texto = str(valor).strip()
+    return texto != "" and texto.lower() != "nan"
 
 def filtrar_questoes(banco, localidade_selecionada, assunto_selecionado):
     """Filtra as questões pela localidade e pelo assunto escolhidos.
@@ -8854,9 +8863,10 @@ def cmd_click23():
         estado["resposta_var"] = StringVar(value="")
         opcoes = [("A", pergunta["opcao_a"]), ("B", pergunta["opcao_b"]),
                   ("C", pergunta["opcao_c"]), ("D", pergunta["opcao_d"])]
+        opcoes_validas = [(letra, texto) for letra, texto in opcoes if opcao_preenchida(texto)]
 
         y_pos = 100
-        for letra, texto in opcoes:
+        for letra, texto in opcoes_validas:
             Radiobutton(conteudo_frame, text=f"{letra}) {texto}", variable=estado["resposta_var"],
                         value=letra, bg="#F0F0F0", font=("Arial", 11), wraplength=1080,
                         justify="left", anchor="w").place(x=50, y=y_pos, width=1090, height=50)
