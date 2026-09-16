@@ -1,4 +1,4 @@
-# Código atualizado em 14-09-26 – 21,22 (Inclusão do Click_23)
+# Código atualizado em 15-09-26 – 21,30 (Inclusão do Click_23)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8926,8 +8926,13 @@ def cmd_click23():
         limpar_conteudo()
         rodape_label.config(text="")
 
+        if percentual >= 50:
+            saudacao = f"Parabéns, {estado['nome']}! Isso é fruto de muita dedicação e empenho.\n\n"
+        else:
+            saudacao = f"Olá, {estado['nome']}! Não desanime. Confiamos que você é capaz de superar isso.\n\n"
+
         resultado_texto = (
-            f"Parabéns, {estado['nome']}!\n\n"
+            saudacao +
             f"Você acertou {acertos} de {total} perguntas ({percentual:.1f}%)."
         )
 
@@ -8935,12 +8940,12 @@ def cmd_click23():
               justify="left", wraplength=800).place(x=30, y=20, width=800)
 
         grafico = criar_grafico_resultado(conteudo_frame, percentual, percentual_media)
-        grafico.get_tk_widget().place(x=30, y=90, width=800, height=290)
+        grafico.get_tk_widget().place(x=180, y=90, width=800, height=290)
 
         Button(conteudo_frame, text="Responder Novamente", command=tela_configuracao,
-               bg="#024593", fg="white", font=("Arial", 11, "bold")).place(x=30, y=400, width=200, height=35)
+               bg="#024593", fg="white", font=("Arial", 11, "bold")).place(x=180, y=400, width=200, height=35)
         Button(conteudo_frame, text="Fechar", command=quiz_win.destroy,
-               bg="#FF0000", fg="white", font=("Arial", 11, "bold")).place(x=250, y=400, width=120, height=35)
+               bg="#FF0000", fg="white", font=("Arial", 11, "bold")).place(x=420, y=400, width=120, height=35)
 
     tela_configuracao()
 
