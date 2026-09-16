@@ -1,4 +1,4 @@
-# Código atualizado em 13-09-26 – 22,20 (Inclusão do Click_23)
+# Código atualizado em 15-09-26 – 21,30 (Inclusão do Click_23)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8560,6 +8560,15 @@ def carregar_questoes():
     df = pd.read_csv(QUESTOES_CSV, sep=SEPARADOR_CSV_QUESTOES, encoding="utf-8-sig")
     return df.to_dict(orient="records")
 
+def opcao_preenchida(valor):
+    """Indica se uma célula de alternativa (opcao_a..d) tem conteúdo real.
+
+    Permite questões de Verdadeiro/Falso (só A e B) ou de 3 alternativas (A, B e C),
+    deixando opcao_c e/ou opcao_d em branco (ou só com espaço) no CSV."""
+    if valor is None:
+        return False
+    texto = str(valor).strip()
+    return texto != "" and texto.lower() != "nan"
 
 def filtrar_questoes(banco, localidade_selecionada, assunto_selecionado):
     """Filtra as questões pela localidade e pelo assunto escolhidos.
@@ -8854,9 +8863,10 @@ def cmd_click23():
         estado["resposta_var"] = StringVar(value="")
         opcoes = [("A", pergunta["opcao_a"]), ("B", pergunta["opcao_b"]),
                   ("C", pergunta["opcao_c"]), ("D", pergunta["opcao_d"])]
+        opcoes_validas = [(letra, texto) for letra, texto in opcoes if opcao_preenchida(texto)]
 
         y_pos = 100
-        for letra, texto in opcoes:
+        for letra, texto in opcoes_validas:
             Radiobutton(conteudo_frame, text=f"{letra}) {texto}", variable=estado["resposta_var"],
                         value=letra, bg="#F0F0F0", font=("Arial", 11), wraplength=1080,
                         justify="left", anchor="w").place(x=50, y=y_pos, width=1090, height=50)
@@ -8916,8 +8926,13 @@ def cmd_click23():
         limpar_conteudo()
         rodape_label.config(text="")
 
+        if percentual >= 50:
+            saudacao = f"Parabéns, {estado['nome']}! Isso é fruto de muita dedicação e empenho.\n\n"
+        else:
+            saudacao = f"Olá, {estado['nome']}! Não desanime. Confiamos que você é capaz de superar isso.\n\n"
+
         resultado_texto = (
-            f"Parabéns, {estado['nome']}!\n\n"
+            saudacao +
             f"Você acertou {acertos} de {total} perguntas ({percentual:.1f}%)."
         )
 
@@ -8925,12 +8940,12 @@ def cmd_click23():
               justify="left", wraplength=800).place(x=30, y=20, width=800)
 
         grafico = criar_grafico_resultado(conteudo_frame, percentual, percentual_media)
-        grafico.get_tk_widget().place(x=30, y=90, width=800, height=290)
+        grafico.get_tk_widget().place(x=180, y=90, width=800, height=290)
 
         Button(conteudo_frame, text="Responder Novamente", command=tela_configuracao,
-               bg="#024593", fg="white", font=("Arial", 11, "bold")).place(x=30, y=400, width=200, height=35)
+               bg="#024593", fg="white", font=("Arial", 11, "bold")).place(x=180, y=400, width=200, height=35)
         Button(conteudo_frame, text="Fechar", command=quiz_win.destroy,
-               bg="#FF0000", fg="white", font=("Arial", 11, "bold")).place(x=250, y=400, width=120, height=35)
+               bg="#FF0000", fg="white", font=("Arial", 11, "bold")).place(x=420, y=400, width=120, height=35)
 
     tela_configuracao()
 
