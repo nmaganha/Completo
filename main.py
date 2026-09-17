@@ -1,4 +1,4 @@
-# Código atualizado em 15-09-26 – 21,30 (Inclusão do Click_23)
+# Código atualizado em 17-09-26 – 16,58 (Inclusão do Click_24)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF, XPos, YPos
 import os
 import platform
+import shutil
 import subprocess
 import random #exclusivo para o click23
 #import webbrowser
@@ -8950,6 +8951,749 @@ def cmd_click23():
     tela_configuracao()
 
 # =======cascate PRIMEIRA PARTE termina aqui
+# ==========cascate PRIMEIRA PARTE inicia aqui ===================================
+    # ---------------------------------------------------
+    # SGA - SISTEMA DE GESTÃO DE ATIVIDADES (CLICK_24)
+    # ---------------------------------------------------
+
+PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
+# Mesmo banco de dados já usado no restante do aplicativo (login, demais módulos).
+BANCO_SGA = "dados_turno.db"
+PASTA_ANEXOS_SGA = os.path.join(PASTA_BASE, "sga_anexos")
+
+OPCOES_LOCALIDADE_SGA = ["MGP", "SJO", "QUE", "LAV", "FGO", "PTM", "EAP", "COG"]
+
+STATUS_ABERTO = "ABERTO"
+STATUS_CANCELADO = "CANCELADO"
+STATUS_REABERTO = "REABERTO"
+STATUS_CONCLUIDO = "CONCLUÍDO"
+
+STATUS_LANCAMENTO_ATIVO = "ATIVO"
+STATUS_LANCAMENTO_CANCELADO = "CANCELADO"
+
+LIMITE_PAGINAS_AVISO = 20
+
+
+def obter_nome_usuario_logado():
+    """Extrai o nome puro do usuário a partir do current_user da sessão de login
+    (formato 'usuario em dd/mm/aaaa - HH:Mmh')."""
+    if not current_user:
+        return None
+    return current_user.split(" em ")[0].strip()
+
+
+def _adicionar_coluna_se_necessario(cursor, tabela, coluna, definicao):
+    """Adiciona uma coluna a uma tabela já existente, caso ainda não exista
+    (permite evoluir o esquema do SGA sem perder os dados já gravados)."""
+    cursor.execute(f"PRAGMA table_info({tabela})")
+    colunas_existentes = [linha[1] for linha in cursor.fetchall()]
+    if coluna not in colunas_existentes:
+        cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+
+
+def garantir_banco_sga():
+    """Cria as tabelas do SGA (se não existirem) no mesmo banco já usado pelo aplicativo,
+    aplica migrações de colunas novas em bancos já existentes, e garante a pasta onde os
+    documentos anexados ficam armazenados permanentemente."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_processos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        titulo TEXT UNIQUE NOT NULL,
+                        localidade TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ABERTO',
+                        cancelado_por TEXT,
+                        data_cancelamento TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_lancamentos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        processo_id INTEGER NOT NULL,
+                        data_hora TEXT NOT NULL,
+                        usuario TEXT,
+                        descricao TEXT,
+                        FOREIGN KEY(processo_id) REFERENCES sga_processos(id))''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_documentos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lancamento_id INTEGER NOT NULL,
+                        nome_original TEXT NOT NULL,
+                        caminho_armazenado TEXT NOT NULL,
+                        FOREIGN KEY(lancamento_id) REFERENCES sga_lancamentos(id))''')
+
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "status", "TEXT DEFAULT 'ATIVO'")
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "cancelado_por", "TEXT")
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "data_cancelamento", "TEXT")
+
+    conexao.commit()
+    conexao.close()
+    os.makedirs(PASTA_ANEXOS_SGA, exist_ok=True)
+
+
+def listar_processos():
+    """Retorna todos os processos cadastrados, ordenados alfabeticamente pelo título."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id, titulo, localidade, status, cancelado_por FROM sga_processos ORDER BY titulo ASC")
+    linhas = cursor.fetchall()
+    conexao.close()
+    return linhas
+
+
+def buscar_processo(processo_id):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id, titulo, localidade, status, cancelado_por FROM sga_processos WHERE id = ?",
+                   (processo_id,))
+    linha = cursor.fetchone()
+    conexao.close()
+    return linha
+
+
+def titulo_ja_existe(titulo):
+    """Retorna o id do processo se já existir um com esse título (comparação sem diferenciar maiúsculas), senão None."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id FROM sga_processos WHERE UPPER(titulo) = ?", (titulo.strip().upper(),))
+    linha = cursor.fetchone()
+    conexao.close()
+    return linha[0] if linha else None
+
+
+def criar_processo(titulo, localidade):
+    """Cria um novo processo (sempre com o título em maiúsculas) e retorna seu id."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_processos (titulo, localidade, status) VALUES (?, ?, ?)",
+                   (titulo.strip().upper(), localidade, STATUS_ABERTO))
+    processo_id = cursor.lastrowid
+    conexao.commit()
+    conexao.close()
+    return processo_id
+
+
+def inserir_lancamento(processo_id, data_hora, usuario, descricao):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_lancamentos (processo_id, data_hora, usuario, descricao) VALUES (?, ?, ?, ?)",
+                   (processo_id, data_hora, usuario, descricao))
+    lancamento_id = cursor.lastrowid
+    conexao.commit()
+    conexao.close()
+    return lancamento_id
+
+
+def anexar_documento(processo_id, lancamento_id, caminho_original):
+    """Copia o arquivo selecionado (qualquer extensão) para a pasta de anexos do SGA,
+    mantendo-o vinculado permanentemente ao lançamento (independente do arquivo original
+    ser movido/apagado depois)."""
+    pasta_processo = os.path.join(PASTA_ANEXOS_SGA, str(processo_id))
+    os.makedirs(pasta_processo, exist_ok=True)
+
+    nome_original = os.path.basename(caminho_original)
+    nome_armazenado = f"{lancamento_id}_{nome_original}"
+    caminho_destino = os.path.join(pasta_processo, nome_armazenado)
+    shutil.copyfile(caminho_original, caminho_destino)
+
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_documentos (lancamento_id, nome_original, caminho_armazenado) VALUES (?, ?, ?)",
+                   (lancamento_id, nome_original, caminho_destino))
+    conexao.commit()
+    conexao.close()
+
+
+def _parse_data_hora(texto):
+    """Converte o texto de Data-Hora digitado/selecionado pelo usuário em um datetime,
+    para permitir ordenação cronológica real (e não apenas pela ordem de lançamento).
+    Se o formato não for reconhecido, retorna a menor data possível (vai para o início)."""
+    texto = (texto or "").strip()
+    formatos = ["%d/%m/%Y - %H:%Mh", "%d/%m/%Y - %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"]
+    for formato in formatos:
+        try:
+            return datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+    return datetime.min
+
+
+def listar_lancamentos(processo_id):
+    """Retorna todos os lançamentos do processo, em ordem CRONOLÓGICA (pela Data-Hora
+    informada, não pela ordem em que foram digitados), cada um já com seu status de
+    cancelamento e a lista de documentos anexados (lançamentos cancelados não têm mais
+    documentos, pois eles são excluídos do banco ao cancelar o lançamento)."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT id, data_hora, usuario, descricao, status, cancelado_por, data_cancelamento "
+        "FROM sga_lancamentos WHERE processo_id = ? ORDER BY id ASC",
+        (processo_id,))
+    lancamentos = cursor.fetchall()
+
+    resultado = []
+    for lanc_id, data_hora, usuario, descricao, status, cancelado_por, data_cancelamento in lancamentos:
+        cursor.execute("SELECT nome_original, caminho_armazenado FROM sga_documentos WHERE lancamento_id = ?",
+                       (lanc_id,))
+        documentos = cursor.fetchall()
+        resultado.append({
+            "id": lanc_id, "data_hora": data_hora, "usuario": usuario,
+            "descricao": descricao, "status": status or STATUS_LANCAMENTO_ATIVO,
+            "cancelado_por": cancelado_por, "data_cancelamento": data_cancelamento,
+            "documentos": documentos
+        })
+    conexao.close()
+
+    resultado.sort(key=lambda lanc: _parse_data_hora(lanc["data_hora"]))
+    return resultado
+
+
+def cancelar_processo(processo_id, usuario):
+    """Marca o processo como CANCELADO, preservando todo o histórico e documentos."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cursor.execute("UPDATE sga_processos SET status = ?, cancelado_por = ?, data_cancelamento = ? WHERE id = ?",
+                   (STATUS_CANCELADO, usuario, agora, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def reabrir_processo(processo_id):
+    """Reabre um processo cancelado, retornando seu status para REABERTO."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_processos SET status = ? WHERE id = ?", (STATUS_REABERTO, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def concluir_processo(processo_id):
+    """Marca o processo como CONCLUÍDO."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_processos SET status = ? WHERE id = ?", (STATUS_CONCLUIDO, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def cancelar_lancamento(lancamento_id, usuario):
+    """Cancela um lançamento específico (permanece no histórico, tachado), e remove do
+    banco de dados os documentos anexados a ele, tornando-os inacessíveis."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cursor.execute(
+        "UPDATE sga_lancamentos SET status = ?, cancelado_por = ?, data_cancelamento = ? WHERE id = ?",
+        (STATUS_LANCAMENTO_CANCELADO, usuario, agora, lancamento_id))
+    cursor.execute("DELETE FROM sga_documentos WHERE lancamento_id = ?", (lancamento_id,))
+    conexao.commit()
+    conexao.close()
+
+
+def gerar_pdf_processo(titulo, localidade, lancamentos, status, cancelado_por):
+    """Gera o PDF completo do processo (título, localidade, todos os lançamentos com
+    data/hora, descrição e relação de documentos anexados) e abre o arquivo gerado."""
+    try:
+        pdf = FPDF(orientation='P', unit='mm', format='A4')
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+
+        pdf.set_font("helvetica", 'B', 14)
+        pdf.cell(0, 10, f"Processo - {titulo}", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+
+        pdf.set_font("helvetica", '', 10)
+        status_texto = f"Status: {status}"
+        if status == STATUS_CANCELADO:
+            status_texto += f"  (Cancelado por: {cancelado_por})"
+        pdf.cell(0, 6, f"Localidade: {localidade}    |    {status_texto}", 0,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        pdf.ln(6)
+
+        for lanc in lancamentos:
+            cancelado = lanc.get("status") == STATUS_LANCAMENTO_CANCELADO
+
+            pdf.set_font("helvetica", 'B', 10)
+            texto_cabecalho = f"{lanc['data_hora']}    -    {localidade}"
+            if cancelado:
+                texto_cabecalho += f"    [CANCELADO por: {lanc.get('cancelado_por')}]"
+            pdf.cell(0, 6, texto_cabecalho, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            pdf.set_font("helvetica", '', 10)
+            pdf.multi_cell(0, 6, lanc["descricao"], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            if lanc["documentos"]:
+                nomes = ", ".join(nome for nome, _ in lanc["documentos"])
+                pdf.set_font("helvetica", 'I', 9)
+                pdf.multi_cell(0, 5, f"Documento(s) anexado(s): {nomes}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            pdf.ln(2)
+            y = pdf.get_y()
+            pdf.set_draw_color(2, 69, 147)
+            pdf.line(10, y, 200, y)
+            pdf.ln(4)
+
+        nome_base = "".join(c if c.isalnum() else "_" for c in titulo)[:50]
+        nome_arquivo = os.path.join(PASTA_BASE, f"processo_{nome_base}.pdf")
+        pdf.output(nome_arquivo)
+
+        total_paginas = pdf.page_no()
+        os.startfile(nome_arquivo)
+        messagebox.showinfo("Sucesso", "PDF do processo gerado com sucesso!")
+
+        if total_paginas > LIMITE_PAGINAS_AVISO:
+            messagebox.showinfo(
+                "Aviso",
+                f"Este processo já gerou um PDF com {total_paginas} páginas.\n\n"
+                f"Considere abrir um novo processo com o título '{titulo} PARTE2' "
+                f"para os próximos lançamentos."
+            )
+    except Exception as erro:
+        messagebox.showerror("Erro", f"Falha ao gerar o PDF do processo: {erro}")
+
+
+class ToolTipSGA:
+    """Tooltip simples (texto flutuante) exibido ao passar o mouse sobre um widget."""
+
+    def __init__(self, widget, texto):
+        self.widget = widget
+        self.texto = texto
+        self.tipwindow = None
+        widget.bind("<Enter>", self.mostrar)
+        widget.bind("<Leave>", self.esconder)
+
+    def mostrar(self, event=None):
+        if self.tipwindow or not self.texto:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        Label(tw, text=self.texto, background="#ffffe0", relief="solid",
+              borderwidth=1, font=("Arial", 9)).pack(ipadx=4, ipady=2)
+
+    def esconder(self, event=None):
+        if self.tipwindow:
+            self.tipwindow.destroy()
+            self.tipwindow = None
+
+
+def criar_area_rolavel(parent, x, y, width, height, bg="#F0F0F0"):
+    """Cria uma área com barra de rolagem vertical (Canvas + Scrollbar + Frame interno),
+    usada tanto no índice de processos quanto no histórico de cada processo."""
+    canvas = Canvas(parent, bg=bg, highlightthickness=0)
+    scrollbar = Scrollbar(parent, orient=VERTICAL, command=canvas.yview)
+    inner_frame = Frame(canvas, bg=bg)
+
+    inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    janela_interna = canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.bind("<Configure>", lambda e: canvas.itemconfig(janela_interna, width=e.width))
+
+    largura_scroll = 18
+    canvas.place(x=x, y=y, width=width - largura_scroll, height=height)
+    scrollbar.place(x=x + width - largura_scroll, y=y, width=largura_scroll, height=height)
+
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _bind_wheel(event):
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+    def _unbind_wheel(event):
+        canvas.unbind_all("<MouseWheel>")
+
+    canvas.bind("<Enter>", _bind_wheel)
+    canvas.bind("<Leave>", _unbind_wheel)
+
+    return inner_frame
+
+
+def tela_atualizar_novo_lancamento(parent, processo_id, callback_atualizar):
+    """Janela 'Atualizar/Novo Lançamento'. Se processo_id for informado, é uma
+    atualização de processo existente (título e localidade travados). Caso contrário,
+    é a abertura de um novo processo."""
+    processo_existente = buscar_processo(processo_id) if processo_id else None
+
+    janela = Toplevel(parent)
+    janela.title("Atualizar/Novo Lançamento")
+    janela.geometry('1100x750')
+    janela.resizable(False, False)
+    janela['bg'] = "#a4bad2"
+
+    Label(janela, text='Atualizar/Novo Lançamento', font=('Arial', 14, 'bold'),
+          bg="#024593", fg="white").place(relx=0, rely=0, width=850, height=55)
+
+    # Data-Hora
+    Label(janela, text='Data-Hora:', bg="#a4bad2", font=("Arial", 10, "bold")).place(x=30, y=75)
+    entry_data_hora = Entry(janela)
+    entry_data_hora.place(x=115, y=75, width=170, height=25)
+    entry_data_hora.insert(0, datetime.now().strftime("%d/%m/%Y - %H:%Mh"))
+
+    def selecionar_data():
+        def salvar_data():
+            data_selecionada = cal.selection_get().strftime('%d/%m/%Y')
+            hora_atual = datetime.now().strftime('%H:%M')
+            entry_data_hora.delete(0, END)
+            entry_data_hora.insert(0, f"{data_selecionada} - {hora_atual}h")
+            janela_cal.destroy()
+
+        janela_cal = Toplevel(janela)
+        janela_cal.title("Selecione a Data")
+        cal = Calendar(janela_cal, selectmode='day', date_pattern='dd-mm-yyyy')
+        cal.pack(pady=20)
+        Button(janela_cal, text="Salvar", command=salvar_data).pack(pady=10)
+
+    Button(janela, text="Selecionar", command=selecionar_data).place(x=295, y=75, width=90, height=25)
+
+    # Localidade
+    Label(janela, text='Localidade:', bg="#a4bad2", font=("Arial", 10, "bold")).place(x=410, y=75)
+    combo_localidade = ttk.Combobox(janela, values=OPCOES_LOCALIDADE_SGA, state="readonly")
+    combo_localidade.place(x=500, y=75, width=110, height=25)
+
+    # Título
+    Label(janela, text='Título:', bg="#a4bad2", font=("Arial", 10, "bold")).place(x=30, y=120)
+    entry_titulo = Entry(janela, font=("Arial", 11))
+    entry_titulo.place(x=115, y=120, width=960, height=28)
+
+    if processo_existente:
+        _, titulo_atual, localidade_atual, status_atual, _ = processo_existente
+        entry_titulo.insert(0, titulo_atual)
+        entry_titulo.config(state="disabled")
+        combo_localidade.set(localidade_atual)
+        combo_localidade.config(state="disabled")
+
+    # Descrição
+    Label(janela, text='Descrição do Lançamento:', bg="#a4bad2",
+          font=("Arial", 10, "bold")).place(x=30, y=165)
+    frame_desc = Frame(janela)
+    frame_desc.place(x=30, y=190, width=1050, height=340)
+    scroll_desc = Scrollbar(frame_desc)
+    scroll_desc.pack(side=RIGHT, fill=Y)
+    texto_descricao = Text(frame_desc, wrap=WORD, yscrollcommand=scroll_desc.set, font=("Arial", 10))
+    texto_descricao.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll_desc.config(command=texto_descricao.yview)
+
+    # Documentos anexados
+    Label(janela, text='Documentos Anexados:', bg="#a4bad2",
+          font=("Arial", 10, "bold")).place(x=30, y=540)
+    lista_anexos = Listbox(janela, font=("Arial", 9))
+    lista_anexos.place(x=30, y=565, width=900, height=75)
+
+    anexos_selecionados = []
+
+    def anexar_arquivo():
+        caminhos = filedialog.askopenfilenames(title="Selecionar Arquivo(s)", parent=janela,
+                                                filetypes=[("Todos os arquivos", "*.*")])
+        for caminho in caminhos:
+            anexos_selecionados.append(caminho)
+            lista_anexos.insert(END, os.path.basename(caminho))
+
+    def remover_anexo():
+        selecao = lista_anexos.curselection()
+        if selecao:
+            idx = selecao[0]
+            lista_anexos.delete(idx)
+            anexos_selecionados.pop(idx)
+
+    Button(janela, text="Anexar Arquivo", command=anexar_arquivo, bg="#024593", fg="white"
+           ).place(x=950, y=565, width=110, height=32)
+    Button(janela, text="Remover", command=remover_anexo, bg="#555555", fg="white"
+           ).place(x=950, y=605, width=110, height=32)
+
+    def salvar():
+        data_hora = entry_data_hora.get().strip()
+        localidade = combo_localidade.get().strip()
+        titulo = entry_titulo.get().strip().upper()
+        descricao = texto_descricao.get("1.0", END).strip()
+
+        if not data_hora or not localidade or not titulo or not descricao:
+            messagebox.showwarning("Atenção",
+                                    "Preencha Data-Hora, Localidade, Título e Descrição antes de salvar.",
+                                    parent=janela)
+            return
+
+        if processo_existente:
+            processo_id_final = processo_existente[0]
+        else:
+            existente_id = titulo_ja_existe(titulo)
+            if existente_id:
+                messagebox.showerror(
+                    "Título já existe",
+                    f"Já existe um processo com o título '{titulo}'.\n\n"
+                    f"Para acrescentar um novo lançamento a esse processo já existente, "
+                    f"feche esta janela e use o botão 'A' (Atualizar) na lista de processos.",
+                    parent=janela)
+                return
+            processo_id_final = criar_processo(titulo, localidade)
+
+        usuario = obter_nome_usuario_logado()
+        lancamento_id = inserir_lancamento(processo_id_final, data_hora, usuario, descricao)
+
+        for caminho in anexos_selecionados:
+            anexar_documento(processo_id_final, lancamento_id, caminho)
+
+        messagebox.showinfo("Sucesso", "Lançamento salvo com sucesso!", parent=janela)
+        janela.destroy()
+        callback_atualizar()
+
+    Button(janela, text="SALVAR", command=salvar, bg="#024593", fg="white",
+           font=("Arial", 11, "bold")).place(x=380, y=665, width=140, height=35)
+    Button(janela, text="VOLTAR", command=janela.destroy, bg="#FF0000", fg="white",
+           font=("Arial", 11, "bold")).place(x=540, y=665, width=140, height=35)
+
+
+def tela_ver_processo(parent, processo_id, callback_atualizar):
+    """Janela 'Processo - {Título}': histórico completo, em ordem CRONOLÓGICA, com
+    documentos anexados, cancelamento individual de cada lançamento, e os botões
+    IMPRIMIR / VOLTAR / CONCLUIR. (O cancelamento do processo inteiro é feito pelo
+    botão 'C' na tela do índice, não mais aqui.)"""
+    processo = buscar_processo(processo_id)
+    if not processo:
+        messagebox.showerror("Erro", "Processo não encontrado.", parent=parent)
+        return
+    _, titulo, localidade, status_processo, cancelado_por = processo
+
+    janela = Toplevel(parent)
+    janela.title(f"Processo - {titulo}")
+    janela.geometry('1100x750')
+    janela.resizable(False, False)
+    janela['bg'] = "#a4bad2"
+
+    Label(janela, text='Processo', font=('Arial', 14, 'bold'),
+          bg="#024593", fg="white").place(relx=0, rely=0, width=1100, height=45)
+
+    cabecalho_label = Label(janela, font=('Arial', 12, 'bold'), bg="#a4bad2")
+    cabecalho_label.place(x=20, y=55)
+
+    historico_frame = Frame(janela, borderwidth=1, relief="solid", bg="#F0F0F0")
+    historico_frame.place(x=20, y=90, width=1060, height=570)
+
+    inner_historico = criar_area_rolavel(historico_frame, x=0, y=0, width=1060, height=570)
+
+    estado = {"lancamentos": [], "status_processo": status_processo, "cancelado_por": cancelado_por}
+
+    def atualizar_cabecalho():
+        texto = titulo
+        if estado["status_processo"] == STATUS_CANCELADO:
+            texto += f"   -   CANCELADO por: {estado['cancelado_por']}"
+            cor = "#B00000"
+        elif estado["status_processo"] == STATUS_REABERTO:
+            texto += "   -   REABERTO"
+            cor = "black"
+        elif estado["status_processo"] == STATUS_CONCLUIDO:
+            texto += "   -   CONCLUÍDO"
+            cor = "#0A7A2E"
+        else:
+            cor = "black"
+        cabecalho_label.config(text=texto, fg=cor)
+
+    def cancelar_este_lancamento(lancamento_id):
+        confirmar = messagebox.askyesno(
+            "Cancelar Lançamento",
+            "Deseja cancelar este lançamento específico?\n\n"
+            "Os documentos anexados a ele ficarão inacessíveis (serão removidos do banco "
+            "de dados). O texto do lançamento permanece no histórico, tachado.",
+            parent=janela)
+        if confirmar:
+            cancelar_lancamento(lancamento_id, obter_nome_usuario_logado())
+            montar_historico()
+
+    def montar_historico():
+        for widget in inner_historico.winfo_children():
+            widget.destroy()
+
+        estado["lancamentos"] = listar_lancamentos(processo_id)
+
+        for lanc in estado["lancamentos"]:
+            cancelado = lanc["status"] == STATUS_LANCAMENTO_CANCELADO
+
+            bloco = Frame(inner_historico, bg="#F0F0F0", borderwidth=1, relief="groove")
+            bloco.pack(fill=X, padx=8, pady=6)
+
+            cabecalho_lanc = Frame(bloco, bg="#F0F0F0")
+            cabecalho_lanc.pack(fill=X, padx=6, pady=(6, 0))
+
+            fonte_data = ("Arial", 10, "overstrike") if cancelado else ("Arial", 10, "bold")
+            cor_lanc = "#B00000" if cancelado else "black"
+
+            Label(cabecalho_lanc, text=lanc["data_hora"], bg="#F0F0F0",
+                  font=fonte_data, fg=cor_lanc).pack(side=LEFT)
+
+            if not cancelado:
+                Button(cabecalho_lanc, text="Cancelar", font=("Arial", 8), bg="#FF0000", fg="white",
+                       command=lambda lid=lanc["id"]: cancelar_este_lancamento(lid)
+                       ).pack(side=LEFT, padx=10)
+
+            Label(cabecalho_lanc, text=localidade, bg="#F0F0F0",
+                  font=("Arial", 10, "bold")).pack(side=RIGHT)
+
+            fonte_desc = ("Arial", 10, "overstrike") if cancelado else ("Arial", 10)
+            Label(bloco, text=lanc["descricao"], bg="#F0F0F0", font=fonte_desc, fg=cor_lanc,
+                  justify="left", anchor="w", wraplength=800).pack(fill=X, padx=6, pady=4)
+
+            if cancelado:
+                Label(bloco, text=f"Cancelado – {lanc['cancelado_por']}", bg="#F0F0F0",
+                      font=("Arial", 9, "italic"), fg="#B00000"
+                      ).pack(anchor="e", padx=6, pady=(0, 6))
+            elif lanc["documentos"]:
+                docs_frame = Frame(bloco, bg="#F0F0F0")
+                docs_frame.pack(fill=X, padx=6, pady=(0, 6))
+                for nome_original, caminho_armazenado in lanc["documentos"]:
+                    Button(docs_frame, text=f"Documento: {nome_original}", bg="#e0e0e0",
+                           command=lambda c=caminho_armazenado: os.startfile(c)
+                           ).pack(side=LEFT, padx=3, pady=2)
+
+    atualizar_cabecalho()
+    montar_historico()
+
+    def imprimir():
+        resposta = messagebox.askquestion(
+            "Imprimir Processo",
+            "Deseja excluir os lançamentos cancelados da impressão?",
+            parent=janela)
+        lancamentos_imprimir = estado["lancamentos"]
+        if resposta == "yes":
+            lancamentos_imprimir = [l for l in lancamentos_imprimir
+                                     if l["status"] != STATUS_LANCAMENTO_CANCELADO]
+        gerar_pdf_processo(titulo, localidade, lancamentos_imprimir,
+                            estado["status_processo"], estado["cancelado_por"])
+
+    def concluir():
+        confirmar = messagebox.askyesno(
+            "Confirmar Conclusão",
+            f"Deseja concluir o processo '{titulo}'?",
+            parent=janela)
+        if confirmar:
+            concluir_processo(processo_id)
+            messagebox.showinfo("Sucesso", "Processo concluído.", parent=janela)
+            janela.destroy()
+            callback_atualizar()
+
+    def voltar():
+        janela.destroy()
+        callback_atualizar()
+
+    Button(janela, text="IMPRIMIR", command=imprimir, bg="#024593", fg="white",
+           font=("Arial", 11, "bold")).place(x=310, y=690, width=140, height=35)
+    Button(janela, text="VOLTAR", command=voltar, bg="#555555", fg="white",
+           font=("Arial", 11, "bold")).place(x=480, y=690, width=140, height=35)
+    Button(janela, text="CONCLUIR", command=concluir, bg="#0A7A2E", fg="white",
+           font=("Arial", 11, "bold")).place(x=650, y=690, width=140, height=35)
+
+
+def cmd_click24():
+    """Tela principal do SGA: índice de processos, em ordem alfabética, com rolagem,
+    botões C (Cancelar) / A (Atualizar) / V (Ver) por processo e o botão Novo Lançamento."""
+    global current_user
+    if not current_user:
+        messagebox.showwarning("Atenção", "Nenhum usuário está logado. Faça login primeiro.")
+        return
+
+    nome_logado = obter_nome_usuario_logado()
+    if not nome_logado:
+        messagebox.showwarning("Atenção", "Não foi possível identificar o usuário logado.")
+        return
+
+    garantir_banco_sga()
+
+    indice_win = Toplevel(root)
+    indice_win.title('COG - SGA')
+    indice_win.geometry('1000x700')
+    indice_win.resizable(False, False)
+    indice_win['bg'] = "#a4bad2"
+
+    Label(indice_win, text='Sistema de Gestão de Atividades - Índice de Processos',
+          font=('Arial', 14, 'bold'), bg="#024593", fg="white"
+          ).place(relx=0.00, rely=0.00, width=1000, height=60)
+
+    lista_frame = Frame(indice_win, borderwidth=1, relief="solid", bg="#F0F0F0")
+    lista_frame.place(x=20, y=80, width=960, height=550)
+
+    inner_indice = criar_area_rolavel(lista_frame, x=0, y=0, width=960, height=550)
+
+    def montar_indice():
+        for widget in inner_indice.winfo_children():
+            widget.destroy()
+
+        for processo_id, titulo, localidade, status, cancelado_por in listar_processos():
+            linha = Frame(inner_indice, bg="#F0F0F0")
+            linha.pack(fill=X, padx=5, pady=4)
+
+            if status == STATUS_CANCELADO:
+                texto_titulo = f"{titulo}  -  CANCELADO por: {cancelado_por}"
+                fonte_titulo = ("Arial", 10, "overstrike")
+                cor_titulo = "#B00000"
+            elif status == STATUS_REABERTO:
+                texto_titulo = f"{titulo}  -  REABERTO"
+                fonte_titulo = ("Arial", 10)
+                cor_titulo = "black"
+            elif status == STATUS_CONCLUIDO:
+                texto_titulo = f"{titulo}  -  CONCLUÍDO"
+                fonte_titulo = ("Arial", 10)
+                cor_titulo = "#0A7A2E"
+            else:
+                texto_titulo = titulo
+                fonte_titulo = ("Arial", 10)
+                cor_titulo = "black"
+
+            Label(linha, text=texto_titulo, bg="#F0F0F0", fg=cor_titulo, font=fonte_titulo,
+                  anchor="w", justify="left", wraplength=470
+                  ).pack(side=LEFT, fill=X, expand=True, padx=(5, 0))
+
+            if status != STATUS_CANCELADO:
+                btn_c = Button(linha, text="C", width=3, bg="#FF0000", fg="white",
+                               command=lambda pid=processo_id, tit=titulo: cancelar_este_processo(pid, tit))
+                btn_c.pack(side=LEFT, padx=3)
+                ToolTipSGA(btn_c, "Cancelar")
+
+            btn_a = Button(linha, text="A", width=3, bg="#024593", fg="white",
+                           command=lambda pid=processo_id: abrir_atualizar(pid))
+            btn_a.pack(side=LEFT, padx=3)
+            ToolTipSGA(btn_a, "Atualizar")
+
+            btn_v = Button(linha, text="V", width=3, bg="#555555", fg="white",
+                           command=lambda pid=processo_id: abrir_ver(pid))
+            btn_v.pack(side=LEFT, padx=3)
+            ToolTipSGA(btn_v, "Ver")
+
+    def cancelar_este_processo(processo_id, titulo_processo):
+        confirmar = messagebox.askyesno(
+            "Confirmar Cancelamento",
+            f"Deseja realmente cancelar o processo '{titulo_processo}'?\n\n"
+            f"Todo o histórico e os documentos serão mantidos; apenas o status "
+            f"passará a CANCELADO.",
+            parent=indice_win)
+        if confirmar:
+            cancelar_processo(processo_id, obter_nome_usuario_logado())
+            montar_indice()
+
+    def abrir_atualizar(processo_id=None):
+        if processo_id:
+            processo = buscar_processo(processo_id)
+            if processo and processo[3] == STATUS_CANCELADO:
+                resposta = messagebox.askquestion(
+                    "Processo Cancelado",
+                    f"O processo '{processo[1]}' está cancelado e não permite novos "
+                    f"lançamentos.\n\nDeseja reabri-lo para incluir um novo lançamento?",
+                    parent=indice_win)
+                if resposta != "yes":
+                    return
+                reabrir_processo(processo_id)
+                montar_indice()
+        tela_atualizar_novo_lancamento(indice_win, processo_id, montar_indice)
+
+    def abrir_ver(processo_id):
+        tela_ver_processo(indice_win, processo_id, montar_indice)
+
+    montar_indice()
+
+    Button(indice_win, text="Novo Lançamento", command=lambda: abrir_atualizar(None),
+           bg="#024593", fg="white", font=("Arial", 11, "bold")
+           ).place(x=375, y=645, width=200, height=35)
+
+# =======cascate PRIMEIRA PARTE termina aqui
+
 
 # ---------------------------------------------------
 # FUNÇÕES RELACIONADAS AO LOGIN
@@ -9262,6 +10006,13 @@ fileAUTO_AVALIACAO.add_command(label="Responder Auto-Avaliação", command=cmd_c
 fileAUTO_AVALIACAO.add_separator()
 fileAUTO_AVALIACAO.add_command(label='Sair', command=root.quit)
 meuMenu.add_cascade(label="AUTO-AVALIAÇÃO", menu=fileAUTO_AVALIACAO)
+# ========cascate SEGUNDA PARTE termina aqui
+# ========cascate Click_24 - SEGUNDA PARTE inicia aqui
+fileSGA = Menu(meuMenu, tearoff=0)
+fileSGA.add_command(label="Sistema de Gestão de Atividades", command=cmd_click24)
+fileSGA.add_separator()
+fileSGA.add_command(label='Sair', command=root.quit)
+meuMenu.add_cascade(label="SGA", menu=fileSGA)
 # ========cascate SEGUNDA PARTE termina aqui
 
 ADMINMenu = Menu(meuMenu, tearoff=0)
