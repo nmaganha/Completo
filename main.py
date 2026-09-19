@@ -1,4 +1,4 @@
-# Código atualizado em 15-09-26 – 21,30 (Inclusão do Click_23)
+# Código atualizado em 19-09-26 – 1444 (possibilidade de excluir lançamento cancelado)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from fpdf import FPDF, XPos, YPos
 import os
 import platform
+import shutil #exclusivo para o click24
 import subprocess
 import random #exclusivo para o click23
 #import webbrowser
@@ -8560,6 +8561,7 @@ def carregar_questoes():
     df = pd.read_csv(QUESTOES_CSV, sep=SEPARADOR_CSV_QUESTOES, encoding="utf-8-sig")
     return df.to_dict(orient="records")
 
+
 def opcao_preenchida(valor):
     """Indica se uma célula de alternativa (opcao_a..d) tem conteúdo real.
 
@@ -8569,6 +8571,7 @@ def opcao_preenchida(valor):
         return False
     texto = str(valor).strip()
     return texto != "" and texto.lower() != "nan"
+
 
 def filtrar_questoes(banco, localidade_selecionada, assunto_selecionado):
     """Filtra as questões pela localidade e pelo assunto escolhidos.
@@ -8633,29 +8636,141 @@ def calcular_media_geral():
     return df["percentual"].mean()
 
 
+# ---------------------------------------------------
+# IDENTIDADE VISUAL DA AUTO-AVALIAÇÃO (cores, fonte e componentes)
+# ---------------------------------------------------
+AV_FONTE = "Segoe UI"
+AV_AZUL = "#024593"
+AV_FUNDO = "#EEF2F7"
+AV_CARD = "#FFFFFF"
+AV_BORDA = "#D5DDE8"
+AV_TEXTO = "#1F2937"
+AV_TEXTO_SUAVE = "#6B7280"
+AV_VERDE = "#0A7A2E"
+AV_VERMELHO = "#B00000"
+AV_AMBAR = "#CC8400"
+
+# (fundo, fundo ao passar o mouse, cor do texto)
+AV_ESTILOS_BOTAO = {
+    "primario": ("#024593", "#013573", "white"),
+    "sucesso": ("#079541", "#057A34", "white"),
+    "aviso": ("#CC8400", "#A86D00", "white"),
+    "neutro": ("#E3E8EF", "#D0D7E2", AV_TEXTO),
+}
+
+
+def criar_botao_av(parent, texto, comando, estilo="primario", fonte=None, **opcoes):
+    """Botão plano com efeito ao passar o mouse (substitui o botão 3D padrão do Tk)."""
+    fundo, fundo_hover, cor_texto = AV_ESTILOS_BOTAO[estilo]
+    botao = Button(parent, text=texto, command=comando, bg=fundo, fg=cor_texto,
+                   activebackground=fundo_hover, activeforeground=cor_texto,
+                   font=fonte or (AV_FONTE, 10, "bold"), relief="flat", bd=0,
+                   cursor="hand2", **opcoes)
+    botao.bind("<Enter>", lambda e: botao.config(bg=fundo_hover))
+    botao.bind("<Leave>", lambda e: botao.config(bg=fundo))
+    return botao
+
+
+def criar_cabecalho_av(janela, texto, altura=56):
+    """Faixa azul do topo da janela, com o título alinhado à esquerda."""
+    cabecalho = Frame(janela, bg=AV_AZUL)
+    cabecalho.place(x=0, y=0, relwidth=1.0, height=altura)
+    Label(cabecalho, text=texto, bg=AV_AZUL, fg="white",
+          font=(AV_FONTE, 15, "bold")).place(x=24, rely=0.5, anchor="w")
+    return cabecalho
+
+
+# Áreas com rolagem da Auto-avaliação que respondem à roda do mouse
+_AREAS_ROLAVEIS_AV = []
+
+
+def _rolar_area_av(evento):
+    """Roda do mouse: rola a área rolável que estiver sob o ponteiro, mesmo quando o
+    ponteiro está sobre uma alternativa ou texto que fica dentro dela."""
+    try:
+        widget = evento.widget.winfo_containing(evento.x_root, evento.y_root)
+    except (TclError, KeyError):
+        return
+    while widget is not None:
+        if widget in _AREAS_ROLAVEIS_AV:
+            widget.yview_scroll(int(-1 * (evento.delta / 120)), "units")
+            return
+        widget = widget.master
+
+
+def criar_area_rolavel_av(parent, bg=AV_CARD):
+    """Área com rolagem vertical que preenche o 'parent'. A barra de rolagem só aparece
+    quando o conteúdo não cabe (perguntas muito longas continuam totalmente acessíveis)."""
+    canvas = Canvas(parent, bg=bg, highlightthickness=0)
+    scrollbar = Scrollbar(parent, orient=VERTICAL, command=canvas.yview)
+    inner_frame = Frame(canvas, bg=bg)
+    largura_scroll = 18
+
+    inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    janela_interna = canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+    canvas.bind("<Configure>", lambda e: canvas.itemconfig(janela_interna, width=e.width))
+
+    def atualizar_barra(primeiro, ultimo):
+        scrollbar.set(primeiro, ultimo)
+        if float(primeiro) <= 0.0 and float(ultimo) >= 1.0:
+            scrollbar.place_forget()
+        else:
+            scrollbar.place(relx=1.0, x=0, y=0, anchor="ne", width=largura_scroll, relheight=1.0)
+
+    canvas.configure(yscrollcommand=atualizar_barra)
+    canvas.place(x=0, y=0, relwidth=1.0, width=-largura_scroll, relheight=1.0)
+
+    _AREAS_ROLAVEIS_AV.append(canvas)
+    canvas.bind("<Destroy>", lambda e: _AREAS_ROLAVEIS_AV.remove(canvas)
+                if e.widget is canvas and canvas in _AREAS_ROLAVEIS_AV else None)
+    janela_topo = parent.winfo_toplevel()
+    if not getattr(janela_topo, "_roda_av_ligada", False):
+        janela_topo._roda_av_ligada = True
+        janela_topo.bind("<MouseWheel>", _rolar_area_av, add="+")
+
+    return inner_frame
+
+
 def criar_grafico_resultado(parent, percentual_usuario, percentual_media, meta=70):
     """Cria o gráfico comparativo (nota do treinando x média geral x meta) embutido no Tkinter."""
-    fig = Figure(figsize=(6.5, 3.3), dpi=100)
+    usa_layout_automatico = True
+    try:
+        fig = Figure(figsize=(6.5, 3.3), dpi=100, facecolor="white", layout="constrained")
+    except TypeError:  # versões antigas do matplotlib
+        fig = Figure(figsize=(6.5, 3.3), dpi=100, facecolor="white")
+        usa_layout_automatico = False
     ax = fig.add_subplot(111)
+    ax.set_facecolor("white")
 
     categorias = ["Sua Nota", "Média Geral"]
     valores = [percentual_usuario, percentual_media]
-    cores = ["#024593", "#079541"]
+    cores = [AV_AZUL, "#9DB4D3"]
 
-    barras = ax.bar(categorias, valores, color=cores, width=0.5)
-    ax.axhline(y=meta, color="red", linestyle="--", linewidth=1.5)
-    ax.text(0.55, meta + 2, f"Meta ({meta:.0f}%)", color="red", fontsize=9, ha="right")
+    barras = ax.bar(categorias, valores, color=cores, width=0.5, zorder=3)
+    ax.axhline(y=meta, color=AV_VERMELHO, linestyle="--", linewidth=1.5, zorder=4,
+               label=f"Avaliação Meta ({meta:.0f}%)")
 
     for barra, valor in zip(barras, valores):
         ax.text(barra.get_x() + barra.get_width() / 2, valor + 2, f"{valor:.1f}%",
-                ha="center", fontsize=10, fontweight="bold")
+                ha="center", fontsize=11, fontweight="bold", color=AV_TEXTO)
 
     ax.set_ylim(0, 110)
-    ax.set_ylabel("Percentual de Acerto (%)")
-    ax.set_title("Comparativo de Desempenho")
-    fig.tight_layout()
+    ax.set_ylabel("Percentual de Acerto (%)", color=AV_TEXTO_SUAVE, fontsize=9)
+    ax.set_title("Comparativo de Desempenho", loc="left", fontsize=12, fontweight="bold", color=AV_TEXTO)
+    ax.yaxis.grid(True, color="#E5EAF1", linewidth=1, zorder=0)
+    ax.set_axisbelow(True)
+    for lado in ("top", "right", "left"):
+        ax.spines[lado].set_visible(False)
+    ax.spines["bottom"].set_color("#C9D3E0")
+    ax.tick_params(colors=AV_TEXTO_SUAVE, length=0)
+    ax.tick_params(axis="x", labelsize=10, colors=AV_TEXTO)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.1), frameon=False, fontsize=9,
+              labelcolor=AV_VERMELHO)
+    if not usa_layout_automatico:
+        fig.tight_layout()
 
     canvas = FigureCanvasTkAgg(fig, master=parent)
+    canvas.get_tk_widget().config(highlightthickness=0)
     canvas.draw()
     return canvas
 
@@ -8687,19 +8802,22 @@ def cmd_click23():
 
     quiz_win = Toplevel(root)
     quiz_win.title('COG - AUTO-AVALIAÇÃO')
-    quiz_win.geometry('1200x650')
-    quiz_win.resizable(False, False)
-    quiz_win['bg'] = "#a4bad2"
+    quiz_win.geometry('900x600')
+    quiz_win.minsize(900, 600)
+    quiz_win.resizable(True, True)
+    quiz_win['bg'] = AV_FUNDO
 
-    lf1 = Label(quiz_win, text='Auto-avaliação - Teste seus Conhecimentos', font=('Arial', '14', 'bold'),
-                bg="#024593", fg="white")
-    lf1.place(relx=0.00, rely=0.00, width=1200, height=60)
+    criar_cabecalho_av(quiz_win, 'Auto-avaliação - Teste seus Conhecimentos')
 
-    conteudo_frame = Frame(quiz_win, borderwidth=1, relief="solid", bg="#F0F0F0")
-    conteudo_frame.place(x=20, y=80, width=1160, height=460)
+    conteudo_frame = Frame(quiz_win, bg=AV_CARD, highlightthickness=1, highlightbackground=AV_BORDA,
+                          highlightcolor=AV_BORDA)
+    conteudo_frame.place(x=24, y=72, relwidth=1.0, width=-48, relheight=1.0, height=-132)
 
-    rodape_label = Label(quiz_win, text="", bg="#a4bad2", font=("Arial", 9))
-    rodape_label.place(x=20, y=560)
+    rodape = Frame(quiz_win, bg=AV_CARD)
+    rodape.place(x=0, rely=1.0, anchor="sw", relwidth=1.0, height=44)
+    Frame(rodape, bg=AV_BORDA).place(x=0, y=0, relwidth=1.0, height=1)
+    rodape_label = Label(rodape, text="", bg=AV_CARD, fg=AV_TEXTO_SUAVE, font=(AV_FONTE, 10))
+    rodape_label.place(x=24, rely=0.5, anchor="w")
 
     estado = {
         "nome": nome_logado,
@@ -8713,6 +8831,7 @@ def cmd_click23():
     }
 
     def limpar_conteudo():
+        conteudo_frame.unbind("<Configure>")
         for widget in conteudo_frame.winfo_children():
             widget.destroy()
 
@@ -8780,35 +8899,54 @@ def cmd_click23():
         limpar_conteudo()
         rodape_label.config(text=f"Treinando: {estado['nome']}")
 
-        Label(conteudo_frame, text=f"Olá, {estado['nome']}! Escolha o formato das questões que deseja responder:",
-              bg="#F0F0F0", font=("Arial", 12, "bold"), wraplength=1100).place(x=30, y=30)
+        saudacao_label = Label(
+            conteudo_frame, text=f"Olá, {estado['nome']}! Escolha o formato das questões que deseja responder:",
+            bg=AV_CARD, fg=AV_TEXTO, font=(AV_FONTE, 14, "bold"), justify="left", anchor="w", wraplength=780)
+        saudacao_label.place(x=28, y=28)
+        conteudo_frame.bind("<Configure>", lambda e: saudacao_label.config(wraplength=max(300, e.width - 56)))
 
         banco_atual = carregar_questoes()
         opcoes_assunto = ["TODAS"] + sorted({str(q["assunto"]).strip() for q in banco_atual})
 
-        # Coluna 1 - Número de questões
-        Label(conteudo_frame, text="Número de questões", bg="#F0F0F0",
-              font=("Arial", 11, "bold")).place(x=40, y=90)
         quantidade_var = IntVar(value=OPCOES_QUANTIDADE_QUESTOES[0])
-        ttk.Combobox(conteudo_frame, textvariable=quantidade_var, values=OPCOES_QUANTIDADE_QUESTOES,
-                     state="readonly", justify='center', font=("Arial", 11), width=15
-                     ).place(x=40, y=120, height=28)
-
-        # Coluna 2 - Localidade
-        Label(conteudo_frame, text="Localidade", bg="#F0F0F0",
-              font=("Arial", 11, "bold")).place(x=540, y=90)
         localidade_var = StringVar(value="TODAS")
-        ttk.Combobox(conteudo_frame, textvariable=localidade_var, values=OPCOES_LOCALIDADE,
-                     state="readonly", justify='center', font=("Arial", 11), width=15
-                     ).place(x=510, y=120, height=28)
-
-        # Coluna 3 - Assunto
-        Label(conteudo_frame, text="Assunto", bg="#F0F0F0",
-              font=("Arial", 11, "bold")).place(x=970, y=90)
         assunto_var = StringVar(value="TODAS")
-        ttk.Combobox(conteudo_frame, textvariable=assunto_var, values=opcoes_assunto,
-                     state="readonly", justify='center', font=("Arial", 11), width=22
-                     ).place(x=910, y=120, height=28)
+
+        form = Frame(conteudo_frame, bg=AV_CARD)
+        form.place(x=28, y=100, relwidth=1.0, width=-56)
+        for coluna in range(3):
+            form.columnconfigure(coluna, weight=1, uniform="colunas")
+
+        def campo(coluna, titulo, variavel, valores, padx):
+            Label(form, text=titulo, bg=AV_CARD, fg=AV_TEXTO_SUAVE, font=(AV_FONTE, 9, "bold")
+                  ).grid(row=0, column=coluna, sticky="w", padx=padx)
+            ttk.Combobox(form, textvariable=variavel, values=valores, state="readonly",
+                         justify='center', font=(AV_FONTE, 11)
+                         ).grid(row=1, column=coluna, sticky="ew", padx=padx, pady=(6, 0), ipady=4)
+
+        campo(0, "Número de questões", quantidade_var, OPCOES_QUANTIDADE_QUESTOES, (0, 12))
+        campo(1, "Localidade", localidade_var, OPCOES_LOCALIDADE, (6, 6))
+        campo(2, "Assunto", assunto_var, opcoes_assunto, (12, 0))
+
+        disponiveis_label = Label(conteudo_frame, text="", bg=AV_CARD, fg=AV_TEXTO_SUAVE,
+                                  font=(AV_FONTE, 10))
+        disponiveis_label.place(x=28, y=190)
+
+        def atualizar_disponiveis(*args):
+            try:
+                quantidade = int(quantidade_var.get())
+            except (ValueError, TclError):
+                return
+            disponiveis = len(filtrar_questoes(banco_atual, localidade_var.get(), assunto_var.get()))
+            suficiente = disponiveis >= quantidade
+            texto = f"Questões disponíveis para esta combinação: {disponiveis}"
+            if not suficiente:
+                texto += "  (insuficiente para o número escolhido)"
+            disponiveis_label.config(text=texto, fg=AV_TEXTO_SUAVE if suficiente else AV_VERMELHO)
+
+        for variavel in (quantidade_var, localidade_var, assunto_var):
+            variavel.trace_add("write", atualizar_disponiveis)
+        atualizar_disponiveis()
 
         def iniciar():
             quantidade = int(quantidade_var.get())
@@ -8837,16 +8975,14 @@ def cmd_click23():
             estado["inicio"] = datetime.now()
             mostrar_pergunta()
 
-        largura_botao = 220
-        x_centralizado = 30 + (1100 - largura_botao) // 2
-
-        Button(conteudo_frame, text="Iniciar Questionário", command=iniciar, bg="#024593", fg="white",
-               font=("Arial", 11, "bold")).place(x=x_centralizado, y=350, width=largura_botao, height=35)
-
         if pode_ver_relatorio:
-            Button(conteudo_frame, text="Relatório dos treinandos", command=gerar_relatorio_treinandos,
-                   bg="#079541", fg="white", font=("Arial", 11, "bold")
-                   ).place(x=x_centralizado, y=400, width=largura_botao, height=35)
+            criar_botao_av(conteudo_frame, "Iniciar Questionário", iniciar, "primario"
+                           ).place(relx=0.5, x=-230, rely=1.0, y=-28, anchor="sw", width=220, height=42)
+            criar_botao_av(conteudo_frame, "Relatório dos treinandos", gerar_relatorio_treinandos, "neutro"
+                           ).place(relx=0.5, x=10, rely=1.0, y=-28, anchor="sw", width=220, height=42)
+        else:
+            criar_botao_av(conteudo_frame, "Iniciar Questionário", iniciar, "primario"
+                           ).place(relx=0.5, x=-110, rely=1.0, y=-28, anchor="sw", width=220, height=42)
 
     def mostrar_pergunta():
         limpar_conteudo()
@@ -8857,20 +8993,64 @@ def cmd_click23():
         rodape_label.config(
             text=f"Treinando: {estado['nome']}    |    Pergunta {idx + 1} de {total}    |    Assunto: {pergunta['assunto']}")
 
-        Label(conteudo_frame, text=f"Questão {idx + 1}: {pergunta['pergunta']}", bg="#F0F0F0",
-              font=("Arial", 12, "bold"), wraplength=1100, justify="left").place(x=30, y=25, width=1100)
+        # Botão de avançar fixo na base do quadro (reservado antes do resto do conteúdo)
+        barra_botao = Frame(conteudo_frame, bg=AV_CARD)
+        barra_botao.pack(side=BOTTOM, fill=X, padx=28, pady=(0, 20))
+
+        # Barra de progresso
+        progresso = Frame(conteudo_frame, bg=AV_CARD)
+        progresso.pack(fill=X, padx=28, pady=(22, 0))
+        Label(progresso, text=f"{idx + 1} / {total}", bg=AV_CARD, fg=AV_TEXTO_SUAVE,
+              font=(AV_FONTE, 9, "bold")).pack(side=RIGHT, padx=(12, 0))
+        trilho = Frame(progresso, bg="#E5EAF1", height=8)
+        trilho.pack(side=LEFT, fill=X, expand=True)
+        trilho.pack_propagate(False)
+        Frame(trilho, bg=AV_AZUL).place(x=0, y=0, relheight=1.0, relwidth=(idx + 1) / total)
+
+        # Pergunta e alternativas ficam numa área com rolagem (perguntas longas continuam acessíveis)
+        area = Frame(conteudo_frame, bg=AV_CARD)
+        area.pack(fill=BOTH, expand=True, padx=(28, 10), pady=(6, 8))
+        corpo = criar_area_rolavel_av(area, bg=AV_CARD)
+
+        pergunta_label = Label(corpo, text=f"Questão {idx + 1}: {pergunta['pergunta']}",
+                               bg=AV_CARD, fg=AV_TEXTO, font=(AV_FONTE, 13, "bold"),
+                               justify="left", anchor="w", wraplength=780)
+        pergunta_label.pack(fill=X, pady=(14, 14))
 
         estado["resposta_var"] = StringVar(value="")
         opcoes = [("A", pergunta["opcao_a"]), ("B", pergunta["opcao_b"]),
                   ("C", pergunta["opcao_c"]), ("D", pergunta["opcao_d"])]
         opcoes_validas = [(letra, texto) for letra, texto in opcoes if opcao_preenchida(texto)]
 
-        y_pos = 100
+        opcoes_frame = Frame(corpo, bg=AV_CARD)
+        opcoes_frame.pack(fill=X)
+
+        botoes_opcao = {}
         for letra, texto in opcoes_validas:
-            Radiobutton(conteudo_frame, text=f"{letra}) {texto}", variable=estado["resposta_var"],
-                        value=letra, bg="#F0F0F0", font=("Arial", 11), wraplength=1080,
-                        justify="left", anchor="w").place(x=50, y=y_pos, width=1090, height=50)
-            y_pos += 50
+            botao_opcao = Radiobutton(
+                opcoes_frame, text=f"{letra})   {texto}", variable=estado["resposta_var"], value=letra,
+                indicatoron=0, relief="flat", offrelief="flat", overrelief="flat", bd=0,
+                bg="#F6F8FB", activebackground="#E9F0FB", selectcolor="#CFE0F7",
+                fg=AV_TEXTO, activeforeground=AV_TEXTO, font=(AV_FONTE, 11), anchor="w",
+                justify="left", padx=16, pady=9, wraplength=740, cursor="hand2",
+                highlightthickness=1, highlightbackground=AV_BORDA, highlightcolor=AV_AZUL)
+            botao_opcao.pack(fill=X, pady=(0, 7))
+            botoes_opcao[letra] = botao_opcao
+
+        def marcar_selecao(*args):
+            escolhida = estado["resposta_var"].get()
+            for letra, botao_opcao in botoes_opcao.items():
+                botao_opcao.config(highlightbackground=AV_AZUL if letra == escolhida else AV_BORDA)
+
+        estado["resposta_var"].trace_add("write", marcar_selecao)
+
+        def ajustar_quebra(evento):
+            largura = max(300, evento.width - 76)
+            pergunta_label.config(wraplength=largura)
+            for botao_opcao in botoes_opcao.values():
+                botao_opcao.config(wraplength=largura - 40)
+
+        conteudo_frame.bind("<Configure>", ajustar_quebra)
 
         def confirmar():
             resposta = estado["resposta_var"].get()
@@ -8898,8 +9078,8 @@ def cmd_click23():
                 finalizar_questionario()
 
         texto_botao = "Próxima Pergunta" if idx + 1 < total else "Finalizar Questionário"
-        Button(conteudo_frame, text=texto_botao, command=confirmar, bg="#024593", fg="white",
-               font=("Arial", 11, "bold")).place(x=510, y=400, width=200, height=35)
+        criar_botao_av(barra_botao, texto_botao, confirmar, "primario"
+                       ).pack(side=RIGHT, ipadx=14, ipady=10)
 
     def finalizar_questionario():
         acertos = estado["acertos"]
@@ -8927,29 +9107,1135 @@ def cmd_click23():
         rodape_label.config(text="")
 
         if percentual >= 50:
-            saudacao = f"Parabéns, {estado['nome']}! Isso é fruto de muita dedicação e empenho.\n\n"
+            saudacao = f"Parabéns, {estado['nome']}!"
         else:
-            saudacao = f"Olá, {estado['nome']}! Não desanime. Confiamos que você é capaz de superar isso.\n\n"
+            saudacao = f"Olá, {estado['nome']}! Não desanime. Confiamos que você é capaz de superar isso."
 
-        resultado_texto = (
-            saudacao +
-            f"Você acertou {acertos} de {total} perguntas ({percentual:.1f}%)."
-        )
+        if percentual >= 70:
+            cor_nota = AV_VERDE
+        elif percentual >= 50:
+            cor_nota = AV_AMBAR
+        else:
+            cor_nota = AV_VERMELHO
 
-        Label(conteudo_frame, text=resultado_texto, bg="#F0F0F0", font=("Arial", 13, "bold"),
-              justify="left", wraplength=800).place(x=30, y=20, width=800)
+        # Painel da esquerda: mensagem e nota
+        painel = Frame(conteudo_frame, bg=AV_CARD)
+        painel.place(x=28, y=24, width=290, relheight=1.0, height=-100)
 
+        Label(painel, text=saudacao, bg=AV_CARD, fg=AV_TEXTO, font=(AV_FONTE, 14, "bold"),
+              justify="left", anchor="w", wraplength=280).pack(fill=X)
+        Label(painel, text=f"{percentual:.1f}%", bg=AV_CARD, fg=cor_nota,
+              font=(AV_FONTE, 40, "bold"), anchor="w").pack(fill=X, pady=(14, 0))
+        Label(painel, text=f"Você acertou {acertos} de {total} perguntas ({percentual:.1f}%).",
+              bg=AV_CARD, fg=AV_TEXTO_SUAVE, font=(AV_FONTE, 10), justify="left", anchor="w",
+              wraplength=280).pack(fill=X, pady=(0, 12))
+        Label(painel, text="Meta de 70% atingida" if percentual >= 70 else "Abaixo da meta de 70%",
+              bg=cor_nota, fg="white", font=(AV_FONTE, 9, "bold"), padx=12, pady=4).pack(anchor="w")
+
+        # Gráfico comparativo à direita
         grafico = criar_grafico_resultado(conteudo_frame, percentual, percentual_media)
-        grafico.get_tk_widget().place(x=180, y=90, width=800, height=290)
+        grafico.get_tk_widget().place(x=340, y=16, relwidth=1.0, width=-368, relheight=1.0, height=-94)
 
-        Button(conteudo_frame, text="Responder Novamente", command=tela_configuracao,
-               bg="#024593", fg="white", font=("Arial", 11, "bold")).place(x=180, y=400, width=200, height=35)
-        Button(conteudo_frame, text="Fechar", command=quiz_win.destroy,
-               bg="#FF0000", fg="white", font=("Arial", 11, "bold")).place(x=420, y=400, width=120, height=35)
+        criar_botao_av(conteudo_frame, "Responder Novamente", tela_configuracao, "primario"
+                       ).place(relx=0.5, x=-165, rely=1.0, y=-24, anchor="sw", width=200, height=42)
+        criar_botao_av(conteudo_frame, "Fechar", quiz_win.destroy, "neutro"
+                       ).place(relx=0.5, x=45, rely=1.0, y=-24, anchor="sw", width=120, height=42)
 
     tela_configuracao()
 
 # =======cascate PRIMEIRA PARTE termina aqui
+#Click_24
+# ==========cascate PRIMEIRA PARTE inicia aqui ===================================
+    # ---------------------------------------------------
+    # SGA - SISTEMA DE GESTÃO DE ATIVIDADES (CLICK_24)
+    # ---------------------------------------------------
+
+PASTA_BASE = os.path.dirname(os.path.abspath(__file__))
+# Mesmo banco de dados já usado no restante do aplicativo (login, demais módulos).
+BANCO_SGA = "dados_turno.db"
+PASTA_ANEXOS_SGA = os.path.join(PASTA_BASE, "sga_anexos")
+
+OPCOES_LOCALIDADE_SGA = ["UHE MGP", "UHE SJO", "PCH QUE", "PCH LAV", "UHE FGO", "CGE PTM", "UFV PTM", "CGE JDT", "COG"]
+
+STATUS_ABERTO = "ABERTO"
+STATUS_CANCELADO = "CANCELADO"
+STATUS_REABERTO = "REABERTO"
+STATUS_CONCLUIDO = "CONCLUÍDO"
+
+STATUS_LANCAMENTO_ATIVO = "ATIVO"
+STATUS_LANCAMENTO_CANCELADO = "CANCELADO"
+
+LIMITE_PAGINAS_AVISO = 40
+# Usuários autorizados a excluir definitivamente um lançamento já cancelado
+USUARIOS_EXCLUSAO_LANCAMENTO = ["nmaganha", "fjunqueira"]
+
+# Identidade visual do SGA (cores e fonte usadas em todas as janelas do módulo)
+SGA_FONTE = "Segoe UI"
+SGA_AZUL = "#024593"
+SGA_FUNDO = "#EEF2F7"
+SGA_CARD = "#FFFFFF"
+SGA_BORDA = "#D5DDE8"
+SGA_TEXTO = "#1F2937"
+SGA_TEXTO_SUAVE = "#6B7280"
+SGA_VERDE = "#0A7A2E"
+SGA_VERMELHO = "#B00000"
+
+def obter_nome_usuario_logado():
+    """Extrai o nome puro do usuário a partir do current_user da sessão de login
+    (formato 'usuario em dd/mm/aaaa - HH:Mmh')."""
+    if not current_user:
+        return None
+    return current_user.split(" em ")[0].strip()
+
+
+def _adicionar_coluna_se_necessario(cursor, tabela, coluna, definicao):
+    """Adiciona uma coluna a uma tabela já existente, caso ainda não exista
+    (permite evoluir o esquema do SGA sem perder os dados já gravados)."""
+    cursor.execute(f"PRAGMA table_info({tabela})")
+    colunas_existentes = [linha[1] for linha in cursor.fetchall()]
+    if coluna not in colunas_existentes:
+        cursor.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+
+
+def garantir_banco_sga():
+    """Cria as tabelas do SGA (se não existirem) no mesmo banco já usado pelo aplicativo,
+    aplica migrações de colunas novas em bancos já existentes, e garante a pasta onde os
+    documentos anexados ficam armazenados permanentemente."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_processos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        titulo TEXT UNIQUE NOT NULL,
+                        localidade TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ABERTO',
+                        cancelado_por TEXT,
+                        data_cancelamento TEXT)''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_lancamentos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        processo_id INTEGER NOT NULL,
+                        data_hora TEXT NOT NULL,
+                        usuario TEXT,
+                        descricao TEXT,
+                        FOREIGN KEY(processo_id) REFERENCES sga_processos(id))''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_documentos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lancamento_id INTEGER NOT NULL,
+                        nome_original TEXT NOT NULL,
+                        caminho_armazenado TEXT NOT NULL,
+                        FOREIGN KEY(lancamento_id) REFERENCES sga_lancamentos(id))''')
+
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "status", "TEXT DEFAULT 'ATIVO'")
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "cancelado_por", "TEXT")
+    _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "data_cancelamento", "TEXT")
+
+    conexao.commit()
+    conexao.close()
+    os.makedirs(PASTA_ANEXOS_SGA, exist_ok=True)
+
+
+def listar_processos():
+    """Retorna todos os processos cadastrados, ordenados alfabeticamente pelo título."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id, titulo, localidade, status, cancelado_por FROM sga_processos ORDER BY titulo ASC")
+    linhas = cursor.fetchall()
+    conexao.close()
+    return linhas
+
+
+def buscar_processo(processo_id):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id, titulo, localidade, status, cancelado_por FROM sga_processos WHERE id = ?",
+                   (processo_id,))
+    linha = cursor.fetchone()
+    conexao.close()
+    return linha
+
+
+def titulo_ja_existe(titulo):
+    """Retorna o id do processo se já existir um com esse título (comparação sem diferenciar maiúsculas), senão None."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT id FROM sga_processos WHERE UPPER(titulo) = ?", (titulo.strip().upper(),))
+    linha = cursor.fetchone()
+    conexao.close()
+    return linha[0] if linha else None
+
+
+def criar_processo(titulo, localidade):
+    """Cria um novo processo (sempre com o título em maiúsculas) e retorna seu id."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_processos (titulo, localidade, status) VALUES (?, ?, ?)",
+                   (titulo.strip().upper(), localidade, STATUS_ABERTO))
+    processo_id = cursor.lastrowid
+    conexao.commit()
+    conexao.close()
+    return processo_id
+
+
+def inserir_lancamento(processo_id, data_hora, usuario, descricao):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_lancamentos (processo_id, data_hora, usuario, descricao) VALUES (?, ?, ?, ?)",
+                   (processo_id, data_hora, usuario, descricao))
+    lancamento_id = cursor.lastrowid
+    conexao.commit()
+    conexao.close()
+    return lancamento_id
+
+
+def anexar_documento(processo_id, lancamento_id, caminho_original):
+    """Copia o arquivo selecionado (qualquer extensão) para a pasta de anexos do SGA,
+    mantendo-o vinculado permanentemente ao lançamento (independente do arquivo original
+    ser movido/apagado depois)."""
+    pasta_processo = os.path.join(PASTA_ANEXOS_SGA, str(processo_id))
+    os.makedirs(pasta_processo, exist_ok=True)
+
+    nome_original = os.path.basename(caminho_original)
+    nome_armazenado = f"{lancamento_id}_{nome_original}"
+    caminho_destino = os.path.join(pasta_processo, nome_armazenado)
+    shutil.copyfile(caminho_original, caminho_destino)
+
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("INSERT INTO sga_documentos (lancamento_id, nome_original, caminho_armazenado) VALUES (?, ?, ?)",
+                   (lancamento_id, nome_original, caminho_destino))
+    conexao.commit()
+    conexao.close()
+
+
+def _parse_data_hora(texto):
+    """Converte o texto de Data-Hora digitado/selecionado pelo usuário em um datetime,
+    para permitir ordenação cronológica real (e não apenas pela ordem de lançamento).
+    Se o formato não for reconhecido, retorna a menor data possível (vai para o início)."""
+    texto = (texto or "").strip()
+    formatos = ["%d/%m/%Y - %H:%Mh", "%d/%m/%Y - %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"]
+    for formato in formatos:
+        try:
+            return datetime.strptime(texto, formato)
+        except ValueError:
+            continue
+    return datetime.min
+
+
+def listar_lancamentos(processo_id):
+    """Retorna todos os lançamentos do processo, em ordem CRONOLÓGICA (pela Data-Hora
+    informada, não pela ordem em que foram digitados), cada um já com seu status de
+    cancelamento e a lista de documentos anexados (lançamentos cancelados não têm mais
+    documentos, pois eles são excluídos do banco ao cancelar o lançamento)."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT id, data_hora, usuario, descricao, status, cancelado_por, data_cancelamento "
+        "FROM sga_lancamentos WHERE processo_id = ? ORDER BY id ASC",
+        (processo_id,))
+    lancamentos = cursor.fetchall()
+
+    resultado = []
+    for lanc_id, data_hora, usuario, descricao, status, cancelado_por, data_cancelamento in lancamentos:
+        cursor.execute("SELECT nome_original, caminho_armazenado FROM sga_documentos WHERE lancamento_id = ?",
+                       (lanc_id,))
+        documentos = cursor.fetchall()
+        resultado.append({
+            "id": lanc_id, "data_hora": data_hora, "usuario": usuario,
+            "descricao": descricao, "status": status or STATUS_LANCAMENTO_ATIVO,
+            "cancelado_por": cancelado_por, "data_cancelamento": data_cancelamento,
+            "documentos": documentos
+        })
+    conexao.close()
+
+    resultado.sort(key=lambda lanc: _parse_data_hora(lanc["data_hora"]))
+    return resultado
+
+
+def cancelar_processo(processo_id, usuario):
+    """Marca o processo como CANCELADO, preservando todo o histórico e documentos."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cursor.execute("UPDATE sga_processos SET status = ?, cancelado_por = ?, data_cancelamento = ? WHERE id = ?",
+                   (STATUS_CANCELADO, usuario, agora, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def reabrir_processo(processo_id):
+    """Reabre um processo cancelado, retornando seu status para REABERTO."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_processos SET status = ? WHERE id = ?", (STATUS_REABERTO, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def concluir_processo(processo_id):
+    """Marca o processo como CONCLUÍDO."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_processos SET status = ? WHERE id = ?", (STATUS_CONCLUIDO, processo_id))
+    conexao.commit()
+    conexao.close()
+
+
+def cancelar_lancamento(lancamento_id, usuario):
+    """Cancela um lançamento específico (permanece no histórico, tachado), apaga do disco
+    os arquivos anexados a ele e remove as respectivas linhas do banco de dados, tornando-os
+    definitivamente inacessíveis."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cursor.execute(
+        "UPDATE sga_lancamentos SET status = ?, cancelado_por = ?, data_cancelamento = ? WHERE id = ?",
+        (STATUS_LANCAMENTO_CANCELADO, usuario, agora, lancamento_id))
+
+    cursor.execute("SELECT caminho_armazenado FROM sga_documentos WHERE lancamento_id = ?", (lancamento_id,))
+    caminhos = [linha[0] for linha in cursor.fetchall()]
+
+    cursor.execute("DELETE FROM sga_documentos WHERE lancamento_id = ?", (lancamento_id,))
+    conexao.commit()
+    conexao.close()
+
+    for caminho in caminhos:
+        try:
+            if os.path.exists(caminho):
+                os.remove(caminho)
+        except OSError:
+            pass
+
+
+def excluir_lancamento(lancamento_id):
+    """Exclui definitivamente um lançamento que já esteja CANCELADO (linha do histórico,
+    documentos remanescentes no banco e arquivos físicos). Retorna True se excluiu, ou
+    False se o lançamento não existe ou não está cancelado (nesse caso nada é alterado)."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT status FROM sga_lancamentos WHERE id = ?", (lancamento_id,))
+    linha = cursor.fetchone()
+    if not linha or linha[0] != STATUS_LANCAMENTO_CANCELADO:
+        conexao.close()
+        return False
+
+    cursor.execute("SELECT caminho_armazenado FROM sga_documentos WHERE lancamento_id = ?", (lancamento_id,))
+    caminhos = [doc[0] for doc in cursor.fetchall()]
+
+    cursor.execute("DELETE FROM sga_documentos WHERE lancamento_id = ?", (lancamento_id,))
+    cursor.execute("DELETE FROM sga_lancamentos WHERE id = ?", (lancamento_id,))
+    conexao.commit()
+    conexao.close()
+
+    for caminho in caminhos:
+        try:
+            if os.path.exists(caminho):
+                os.remove(caminho)
+        except OSError:
+            pass
+    return True
+
+
+def gerar_pdf_processo(titulo, localidade, lancamentos, status, cancelado_por):
+    """Gera o PDF completo do processo (título, localidade, todos os lançamentos com
+    data/hora, descrição e relação de documentos anexados) e abre o arquivo gerado."""
+    try:
+        pdf = FPDF(orientation='P', unit='mm', format='A4')
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+
+        pdf.set_font("helvetica", 'B', 14)
+        pdf.cell(0, 10, f"Processo - {titulo}", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+
+        pdf.set_font("helvetica", '', 10)
+        status_texto = f"Status: {status}"
+        if status == STATUS_CANCELADO:
+            status_texto += f"  (Cancelado por: {cancelado_por})"
+        pdf.cell(0, 6, f"Localidade: {localidade}    |    {status_texto}", 0,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        pdf.ln(6)
+
+        for lanc in lancamentos:
+            cancelado = lanc.get("status") == STATUS_LANCAMENTO_CANCELADO
+
+            pdf.set_font("helvetica", 'B', 10)
+            texto_cabecalho = f"{lanc['data_hora']}    -    {localidade}"
+            if cancelado:
+                texto_cabecalho += f"    [CANCELADO por: {lanc.get('cancelado_por')}]"
+            pdf.cell(0, 6, texto_cabecalho, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            pdf.set_font("helvetica", '', 10)
+            pdf.multi_cell(0, 6, lanc["descricao"], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            if lanc["documentos"]:
+                nomes = ", ".join(nome for nome, _ in lanc["documentos"])
+                pdf.set_font("helvetica", 'I', 9)
+                pdf.multi_cell(0, 5, f"Documento(s) anexado(s): {nomes}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+            if lanc.get("usuario"):
+                pdf.set_font("helvetica", 'I', 9)
+                pdf.cell(0, 5, f"Lançado: {lanc['usuario']}", 0,
+                         new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+
+            pdf.ln(2)
+            y = pdf.get_y()
+            pdf.set_draw_color(2, 69, 147)
+            pdf.line(10, y, 200, y)
+            pdf.ln(4)
+
+        nome_base = "".join(c if c.isalnum() else "_" for c in titulo)[:50]
+        nome_arquivo = os.path.join(PASTA_BASE, f"processo_{nome_base}.pdf")
+        pdf.output(nome_arquivo)
+
+        total_paginas = pdf.page_no()
+        os.startfile(nome_arquivo)
+        messagebox.showinfo("Sucesso", "PDF do processo gerado com sucesso!")
+
+        if total_paginas > LIMITE_PAGINAS_AVISO:
+            messagebox.showinfo(
+                "Aviso",
+                f"Este processo já gerou um PDF com {total_paginas} páginas.\n\n"
+                f"Considere abrir um novo processo com o título '{titulo} PARTE2' "
+                f"para os próximos lançamentos."
+            )
+    except Exception as erro:
+        messagebox.showerror("Erro", f"Falha ao gerar o PDF do processo: {erro}")
+
+
+class ToolTipSGA:
+    """Tooltip simples (texto flutuante) exibido ao passar o mouse sobre um widget."""
+
+    def __init__(self, widget, texto):
+        self.widget = widget
+        self.texto = texto
+        self.tipwindow = None
+        widget.bind("<Enter>", self.mostrar)
+        widget.bind("<Leave>", self.esconder)
+
+    def mostrar(self, event=None):
+        if self.tipwindow or not self.texto:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tipwindow = tw = Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        Label(tw, text=self.texto, background=SGA_TEXTO, foreground="white",
+              borderwidth=0, font=(SGA_FONTE, 9), padx=8, pady=3).pack()
+
+    def esconder(self, event=None):
+        if self.tipwindow:
+            self.tipwindow.destroy()
+            self.tipwindow = None
+
+
+# ---------------------------------------------------
+# COMPONENTES VISUAIS REUTILIZÁVEIS DO SGA
+# ---------------------------------------------------
+# (fundo, fundo ao passar o mouse, cor do texto)
+SGA_ESTILOS_BOTAO = {
+    "primario": ("#024593", "#013573", "white"),
+    "sucesso": ("#079541", "#057A34", "white"),
+    "perigo": ("#C62828", "#A11F1F", "white"),
+    "aviso": ("#CC8400", "#A86D00", "white"),
+    "neutro": ("#E3E8EF", "#D0D7E2", SGA_TEXTO),
+}
+
+
+def criar_botao_sga(parent, texto, comando, estilo="primario", fonte=None, **opcoes):
+    """Botão plano com efeito ao passar o mouse (substitui o botão 3D padrão do Tk)."""
+    fundo, fundo_hover, cor_texto = SGA_ESTILOS_BOTAO[estilo]
+    botao = Button(parent, text=texto, command=comando, bg=fundo, fg=cor_texto,
+                   activebackground=fundo_hover, activeforeground=cor_texto,
+                   font=fonte or (SGA_FONTE, 10, "bold"), relief="flat", bd=0,
+                   cursor="hand2", **opcoes)
+    botao.bind("<Enter>", lambda e: botao.config(bg=fundo_hover))
+    botao.bind("<Leave>", lambda e: botao.config(bg=fundo))
+    return botao
+
+
+def criar_entrada_sga(parent, **opcoes):
+    """Campo de texto de uma linha, plano, com contorno que muda de cor ao receber o foco."""
+    return Entry(parent, relief="flat", bd=5, font=(SGA_FONTE, 10), bg="white", fg=SGA_TEXTO,
+                 disabledbackground="#EEF1F6", disabledforeground=SGA_TEXTO_SUAVE,
+                 insertbackground=SGA_TEXTO, highlightthickness=1,
+                 highlightbackground=SGA_BORDA, highlightcolor=SGA_AZUL, **opcoes)
+
+
+def criar_area_texto_sga(parent, **opcoes):
+    """Área de texto de várias linhas, plana, com margem interna e contorno com foco."""
+    return Text(parent, relief="flat", bd=0, padx=10, pady=8, font=(SGA_FONTE, 10), bg="white",
+                fg=SGA_TEXTO, insertbackground=SGA_TEXTO, highlightthickness=1,
+                highlightbackground=SGA_BORDA, highlightcolor=SGA_AZUL, **opcoes)
+
+
+def criar_cabecalho_sga(janela, texto, altura=56):
+    """Faixa azul do topo da janela, com o título alinhado à esquerda."""
+    cabecalho = Frame(janela, bg=SGA_AZUL)
+    cabecalho.place(x=0, y=0, relwidth=1.0, height=altura)
+    Label(cabecalho, text=texto, bg=SGA_AZUL, fg="white",
+          font=(SGA_FONTE, 15, "bold")).place(x=24, rely=0.5, anchor="w")
+    return cabecalho
+
+
+def criar_rodape_sga(janela, altura=76):
+    """Barra branca fixa na base da janela, onde ficam os botões principais."""
+    rodape = Frame(janela, bg=SGA_CARD)
+    rodape.place(x=0, rely=1.0, anchor="sw", relwidth=1.0, height=altura)
+    Frame(rodape, bg=SGA_BORDA).place(x=0, y=0, relwidth=1.0, height=1)
+    return rodape
+
+
+def criar_selo_sga(parent, texto, fundo, cor_texto="white", fonte=None):
+    """Etiqueta colorida (usada para status e localidade)."""
+    return Label(parent, text=texto, bg=fundo, fg=cor_texto,
+                 font=fonte or (SGA_FONTE, 9, "bold"), padx=10, pady=3)
+
+
+def criar_icone_lupa(parent, bg="white", cor=SGA_TEXTO_SUAVE):
+    """Ícone de lupa desenhado (não depende de fonte/emoji do Windows)."""
+    icone = Canvas(parent, width=22, height=22, bg=bg, highlightthickness=0)
+    icone.create_oval(4, 4, 15, 15, outline=cor, width=2)
+    icone.create_line(13, 13, 19, 19, fill=cor, width=2)
+    return icone
+
+
+# Áreas com rolagem do SGA que respondem à roda do mouse
+_AREAS_ROLAVEIS_SGA = []
+
+
+def _rolar_area_sga(evento):
+    """Roda do mouse: rola a área rolável que estiver sob o ponteiro, mesmo quando o
+    ponteiro está sobre um botão, texto ou card que fica dentro dela."""
+    try:
+        widget = evento.widget.winfo_containing(evento.x_root, evento.y_root)
+    except (TclError, KeyError):
+        return
+    while widget is not None:
+        if widget in _AREAS_ROLAVEIS_SGA:
+            widget.yview_scroll(int(-1 * (evento.delta / 120)), "units")
+            return
+        widget = widget.master
+
+
+def criar_area_rolavel(parent, bg=SGA_FUNDO):
+    """Cria uma área com barra de rolagem vertical (Canvas + Scrollbar + Frame interno),
+    usada tanto no índice de processos quanto no histórico de cada processo.
+    A área preenche todo o 'parent' e acompanha o redimensionamento da janela."""
+    canvas = Canvas(parent, bg=bg, highlightthickness=0)
+    scrollbar = Scrollbar(parent, orient=VERTICAL, command=canvas.yview)
+    inner_frame = Frame(canvas, bg=bg)
+
+    inner_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    janela_interna = canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.bind("<Configure>", lambda e: canvas.itemconfig(janela_interna, width=e.width))
+
+    largura_scroll = 18
+    canvas.place(x=0, y=0, relwidth=1.0, width=-largura_scroll, relheight=1.0)
+    scrollbar.place(relx=1.0, x=0, y=0, anchor="ne", width=largura_scroll, relheight=1.0)
+
+    # Roda do mouse: registra a área e liga o tratamento uma única vez na janela que a contém
+    _AREAS_ROLAVEIS_SGA.append(canvas)
+    canvas.bind("<Destroy>", lambda e: _AREAS_ROLAVEIS_SGA.remove(canvas)
+                if e.widget is canvas and canvas in _AREAS_ROLAVEIS_SGA else None)
+    janela_topo = parent.winfo_toplevel()
+    if not getattr(janela_topo, "_roda_sga_ligada", False):
+        janela_topo._roda_sga_ligada = True
+        janela_topo.bind("<MouseWheel>", _rolar_area_sga, add="+")
+
+    return inner_frame
+
+
+def solicitar_justificativa(parent, titulo_processo):
+    """Abre um quadro (janela modal) para o usuário digitar a justificativa do cancelamento
+    do processo. Retorna o texto informado, ou None se o usuário voltar/fechar sem confirmar
+    (nesse caso o cancelamento não deve ser efetivado)."""
+    resultado = {"texto": None}
+
+    janela = Toplevel(parent)
+    janela.title("Justificativa do Cancelamento")
+    janela.geometry('600x390')
+    janela.resizable(False, False)
+    janela['bg'] = SGA_FUNDO
+    janela.transient(parent)
+
+    criar_cabecalho_sga(janela, 'Justificativa do Cancelamento', altura=52)
+
+    card = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    card.place(x=20, y=68, relwidth=1.0, width=-40, height=230)
+
+    Label(card, text=f"Processo: {titulo_processo}", bg=SGA_CARD, fg=SGA_TEXTO,
+          font=(SGA_FONTE, 10, "bold"), wraplength=530, justify="left", anchor="w"
+          ).place(x=16, y=12, relwidth=1.0, width=-32)
+
+    Label(card, text="Informe o motivo do cancelamento:", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
+          font=(SGA_FONTE, 9, "bold")).place(x=16, y=46)
+
+    frame_texto = Frame(card, bg=SGA_CARD)
+    frame_texto.place(x=16, y=70, relwidth=1.0, width=-32, height=144)
+    scroll = Scrollbar(frame_texto)
+    scroll.pack(side=RIGHT, fill=Y)
+    texto = criar_area_texto_sga(frame_texto, wrap=WORD, yscrollcommand=scroll.set)
+    texto.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll.config(command=texto.yview)
+    texto.focus_set()
+
+    def confirmar():
+        justificativa = texto.get("1.0", END).strip()
+        if not justificativa:
+            messagebox.showwarning("Atenção", "Informe a justificativa do cancelamento.", parent=janela)
+            return
+        resultado["texto"] = justificativa
+        janela.destroy()
+
+    criar_botao_sga(janela, "Confirmar", confirmar, "primario"
+                    ).place(relx=0.5, x=-130, y=318, width=120, height=38)
+    criar_botao_sga(janela, "Voltar", janela.destroy, "neutro"
+                    ).place(relx=0.5, x=10, y=318, width=120, height=38)
+
+    janela.grab_set()
+    janela.wait_window()
+    return resultado["texto"]
+
+
+def tela_atualizar_novo_lancamento(parent, processo_id, callback_atualizar):
+    """Janela 'Atualizar/Novo Lançamento'. Se processo_id for informado, é uma
+    atualização de processo existente (título e localidade travados). Caso contrário,
+    é a abertura de um novo processo."""
+    processo_existente = buscar_processo(processo_id) if processo_id else None
+
+    janela = Toplevel(parent)
+    janela.title("Atualizar/Novo Lançamento")
+    janela.geometry('1100x750')
+    janela.minsize(1100, 750)
+    janela.resizable(True, True)
+    janela['bg'] = SGA_FUNDO
+
+    criar_cabecalho_sga(janela, 'Atualizar/Novo Lançamento')
+
+    card = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    card.place(x=24, y=72, relwidth=1.0, width=-48, relheight=1.0, height=-156)
+
+    def rotulo(texto, x, **posicao):
+        etiqueta = Label(card, text=texto, bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "bold"))
+        etiqueta.place(x=x, **posicao)
+        return etiqueta
+
+    # Data-Hora
+    rotulo('Data-Hora', 20, y=10)
+    entry_data_hora = criar_entrada_sga(card)
+    entry_data_hora.place(x=20, y=36, width=190, height=30)
+    entry_data_hora.insert(0, datetime.now().strftime("%d/%m/%Y - %H:%Mh"))
+
+    def selecionar_data():
+        def salvar_data():
+            data_selecionada = cal.selection_get().strftime('%d/%m/%Y')
+            hora_atual = datetime.now().strftime('%H:%M')
+            entry_data_hora.delete(0, END)
+            entry_data_hora.insert(0, f"{data_selecionada} - {hora_atual}h")
+            janela_cal.destroy()
+
+        janela_cal = Toplevel(janela)
+        janela_cal.title("Selecione a Data")
+        cal = Calendar(janela_cal, selectmode='day', date_pattern='dd-mm-yyyy')
+        cal.pack(pady=20)
+        Button(janela_cal, text="Salvar", command=salvar_data).pack(pady=10)
+
+    criar_botao_sga(card, "Selecionar", selecionar_data, "neutro", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(x=218, y=36, width=100, height=30)
+
+    # Localidade
+    rotulo('Localidade', 344, y=10)
+    combo_localidade = ttk.Combobox(card, values=OPCOES_LOCALIDADE_SGA, state="readonly",
+                                    font=(SGA_FONTE, 10))
+    combo_localidade.place(x=344, y=36, width=170, height=30)
+
+    # Título
+    rotulo('Título', 20, y=78)
+    entry_titulo = criar_entrada_sga(card)
+    entry_titulo.place(x=20, y=104, relwidth=1.0, width=-40, height=30)
+
+    if processo_existente:
+        _, titulo_atual, localidade_atual, status_atual, _ = processo_existente
+        entry_titulo.insert(0, titulo_atual)
+        entry_titulo.config(state="disabled")
+        combo_localidade.set(localidade_atual)
+        combo_localidade.config(state="disabled")
+
+    # Descrição
+    rotulo('Descrição do Lançamento', 20, y=146)
+    frame_desc = Frame(card, bg=SGA_CARD)
+    frame_desc.place(x=20, y=172, relwidth=1.0, width=-40, relheight=1.0, height=-312)
+    scroll_desc = Scrollbar(frame_desc)
+    scroll_desc.pack(side=RIGHT, fill=Y)
+    texto_descricao = criar_area_texto_sga(frame_desc, wrap=WORD, yscrollcommand=scroll_desc.set)
+    texto_descricao.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll_desc.config(command=texto_descricao.yview)
+
+    # Documentos anexados
+    rotulo('Documentos Anexados', 20, rely=1.0, y=-130, anchor="nw")
+    lista_anexos = Listbox(card, font=(SGA_FONTE, 9), relief="flat", bd=0, activestyle="none",
+                           bg="white", fg=SGA_TEXTO, selectbackground="#DCE8F8",
+                           selectforeground=SGA_TEXTO, highlightthickness=1,
+                           highlightbackground=SGA_BORDA, highlightcolor=SGA_AZUL)
+    lista_anexos.place(x=20, rely=1.0, y=-102, anchor="nw", relwidth=1.0, width=-176, height=82)
+
+    anexos_selecionados = []
+
+    def anexar_arquivo():
+        caminhos = filedialog.askopenfilenames(title="Selecionar Arquivo(s)", parent=janela,
+                                                filetypes=[("Todos os arquivos", "*.*")])
+        for caminho in caminhos:
+            anexos_selecionados.append(caminho)
+            lista_anexos.insert(END, os.path.basename(caminho))
+
+    def remover_anexo():
+        selecao = lista_anexos.curselection()
+        if selecao:
+            idx = selecao[0]
+            lista_anexos.delete(idx)
+            anexos_selecionados.pop(idx)
+
+    criar_botao_sga(card, "Anexar Arquivo", anexar_arquivo, "primario", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(relx=1.0, x=-20, rely=1.0, y=-102, anchor="ne", width=130, height=36)
+    criar_botao_sga(card, "Remover", remover_anexo, "sucesso", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(relx=1.0, x=-20, rely=1.0, y=-58, anchor="ne", width=130, height=36)
+
+    def salvar():
+        data_hora = entry_data_hora.get().strip()
+        localidade = combo_localidade.get().strip()
+        titulo = entry_titulo.get().strip().upper()
+        descricao = texto_descricao.get("1.0", END).strip()
+
+        if not data_hora or not localidade or not titulo or not descricao:
+            messagebox.showwarning("Atenção",
+                                    "Preencha Data-Hora, Localidade, Título e Descrição antes de salvar.",
+                                    parent=janela)
+            return
+
+        if processo_existente:
+            processo_id_final = processo_existente[0]
+        else:
+            existente_id = titulo_ja_existe(titulo)
+            if existente_id:
+                messagebox.showerror(
+                    "Título já existe",
+                    f"Já existe um processo com o título '{titulo}'.\n\n"
+                    f"Para acrescentar um novo lançamento a esse processo já existente, "
+                    f"feche esta janela e use o botão 'A' (Atualizar) na lista de processos.",
+                    parent=janela)
+                return
+            processo_id_final = criar_processo(titulo, localidade)
+
+        usuario = obter_nome_usuario_logado()
+        lancamento_id = inserir_lancamento(processo_id_final, data_hora, usuario, descricao)
+
+        for caminho in anexos_selecionados:
+            anexar_documento(processo_id_final, lancamento_id, caminho)
+
+        messagebox.showinfo("Sucesso", "Lançamento salvo com sucesso!", parent=janela)
+        janela.destroy()
+        callback_atualizar()
+
+    rodape = criar_rodape_sga(janela)
+    criar_botao_sga(rodape, "SALVAR", salvar, "primario"
+                    ).place(relx=0.5, x=-150, rely=0.5, anchor="w", width=140, height=40)
+    criar_botao_sga(rodape, "VOLTAR", janela.destroy, "sucesso"
+                    ).place(relx=0.5, x=10, rely=0.5, anchor="w", width=140, height=40)
+    Label(rodape, text=f"Lançado: {obter_nome_usuario_logado()}", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
+          font=(SGA_FONTE, 10, "italic")).place(relx=1.0, x=-24, rely=0.5, anchor="e")
+
+
+def tela_ver_processo(parent, processo_id, callback_atualizar):
+    """Janela 'Processo - {Título}': histórico completo, em ordem CRONOLÓGICA, com
+    documentos anexados, cancelamento individual de cada lançamento, e os botões
+    IMPRIMIR / VOLTAR / CONCLUIR. (O cancelamento do processo inteiro é feito pelo
+    botão 'C' na tela do índice, não mais aqui.)"""
+    processo = buscar_processo(processo_id)
+    if not processo:
+        messagebox.showerror("Erro", "Processo não encontrado.", parent=parent)
+        return
+    _, titulo, localidade, status_processo, cancelado_por = processo
+
+    janela = Toplevel(parent)
+    janela.title(f"Processo - {titulo}")
+    janela.geometry('1100x750')
+    janela.minsize(1100, 750)
+    janela.resizable(True, True)
+    janela['bg'] = SGA_FUNDO
+
+    criar_cabecalho_sga(janela, 'Processo')
+
+    # Resumo: título do processo à esquerda e status à direita
+    resumo = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    resumo.place(x=24, y=72, relwidth=1.0, width=-48, height=64)
+
+    titulo_label = Label(resumo, text=titulo, font=(SGA_FONTE, 13, "bold"), bg=SGA_CARD,
+                         fg=SGA_TEXTO, anchor="w", justify="left", wraplength=700)
+    titulo_label.place(x=18, rely=0.5, anchor="w")
+    resumo.bind("<Configure>", lambda e: titulo_label.config(wraplength=max(200, e.width - 280)))
+
+    grupo_status = Frame(resumo, bg=SGA_CARD)
+    grupo_status.place(relx=1.0, x=-18, rely=0.5, anchor="e")
+    Label(grupo_status, text="Status:", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
+          font=(SGA_FONTE, 10, "bold")).pack(side=LEFT, padx=(0, 8))
+    status_label = criar_selo_sga(grupo_status, "", SGA_AZUL, fonte=(SGA_FONTE, 10, "bold"))
+    status_label.config(padx=14, pady=4)
+    status_label.pack(side=LEFT)
+
+    historico_frame = Frame(janela, bg=SGA_FUNDO)
+    historico_frame.place(x=24, y=148, relwidth=1.0, width=-48, relheight=1.0, height=-236)
+
+    inner_historico = criar_area_rolavel(historico_frame, bg=SGA_FUNDO)
+
+    estado = {"lancamentos": [], "status_processo": status_processo, "cancelado_por": cancelado_por}
+
+    # As descrições acompanham a largura da janela: quando ela é maximizada, o texto
+    # passa a quebrar linha mais à direita (a partir do valor original de 880).
+    labels_descricao = []
+    LARGURA_BASE_JANELA = 1100
+
+    def ajustar_quebra_de_linha(event=None):
+        largura = janela.winfo_width()
+        if largura <= 1:
+            return
+        wrap = max(300, 880 + (largura - LARGURA_BASE_JANELA))
+        for lbl in labels_descricao:
+            lbl.config(wraplength=wrap)
+
+    inner_historico.bind("<Configure>", ajustar_quebra_de_linha, add="+")
+
+    CORES_STATUS_PROCESSO = {
+        STATUS_CANCELADO: SGA_VERMELHO,
+        STATUS_CONCLUIDO: SGA_VERDE,
+        STATUS_REABERTO: "#CC8400",
+        STATUS_ABERTO: SGA_AZUL,
+    }
+
+    def atualizar_cabecalho():
+        estado_atual = str(estado["status_processo"])
+        status_label.config(text=estado_atual,
+                            bg=CORES_STATUS_PROCESSO.get(estado_atual, SGA_AZUL))
+
+    def cancelar_este_lancamento(lancamento_id):
+        confirmar = messagebox.askyesno(
+            "Cancelar Lançamento",
+            "Deseja cancelar este lançamento específico?\n\n"
+            "Os documentos anexados a ele ficarão inacessíveis (serão removidos do banco "
+            "de dados). O texto do lançamento permanece no histórico, tachado.",
+            parent=janela)
+        if confirmar:
+            cancelar_lancamento(lancamento_id, obter_nome_usuario_logado())
+            montar_historico()
+
+    pode_excluir = (obter_nome_usuario_logado() or "").strip().lower() in \
+        [u.lower() for u in USUARIOS_EXCLUSAO_LANCAMENTO]
+
+    def excluir_este_lancamento(lancamento_id):
+        if not pode_excluir:
+            return
+        confirmar = messagebox.askyesno(
+            "Excluir Lançamento",
+            "Deseja excluir DEFINITIVAMENTE este lançamento cancelado?\n\n"
+            "Ele será removido do histórico do processo e essa ação não poderá ser desfeita.",
+            parent=janela)
+        if confirmar:
+            excluir_lancamento(lancamento_id)
+            montar_historico()
+
+    def montar_historico():
+        for widget in inner_historico.winfo_children():
+            widget.destroy()
+        labels_descricao.clear()
+
+        estado["lancamentos"] = listar_lancamentos(processo_id)
+
+        for lanc in estado["lancamentos"]:
+            cancelado = lanc["status"] == STATUS_LANCAMENTO_CANCELADO
+
+            fundo_card = "#FBF1F1" if cancelado else SGA_CARD
+            borda_card = "#E8C9C9" if cancelado else SGA_BORDA
+            cor_faixa = SGA_VERMELHO if cancelado else SGA_AZUL
+            cor_lanc = SGA_VERMELHO if cancelado else SGA_TEXTO
+
+            card_lanc = Frame(inner_historico, bg=fundo_card, highlightthickness=1,
+                              highlightbackground=borda_card)
+            card_lanc.pack(fill=X, padx=(0, 8), pady=(0, 10))
+            Frame(card_lanc, bg=cor_faixa, width=5).pack(side=LEFT, fill=Y)
+
+            corpo = Frame(card_lanc, bg=fundo_card)
+            corpo.pack(side=LEFT, fill=BOTH, expand=True, padx=16, pady=12)
+
+            topo = Frame(corpo, bg=fundo_card)
+            topo.pack(fill=X)
+
+            fonte_data = (SGA_FONTE, 10, "overstrike") if cancelado else (SGA_FONTE, 10, "bold")
+            Label(topo, text=lanc["data_hora"], bg=fundo_card, font=fonte_data,
+                  fg=cor_lanc).pack(side=LEFT)
+
+            if not cancelado:
+                criar_botao_sga(topo, "Cancelar", lambda lid=lanc["id"]: cancelar_este_lancamento(lid),
+                                "neutro", fonte=(SGA_FONTE, 8), padx=8, pady=1
+                                ).pack(side=LEFT, padx=12)
+            elif pode_excluir:
+                criar_botao_sga(topo, "Excluir", lambda lid=lanc["id"]: excluir_este_lancamento(lid),
+                                "perigo", fonte=(SGA_FONTE, 8), padx=8, pady=1
+                                ).pack(side=LEFT, padx=12)
+
+            criar_selo_sga(topo, localidade, "#E3ECF8", cor_texto=SGA_AZUL).pack(side=RIGHT)
+
+            fonte_desc = (SGA_FONTE, 10, "overstrike") if cancelado else (SGA_FONTE, 10)
+            lbl_desc = Label(corpo, text=lanc["descricao"], bg=fundo_card, font=fonte_desc, fg=cor_lanc,
+                             justify="left", anchor="w", wraplength=880)
+            lbl_desc.pack(fill=X, pady=(10, 6))
+            labels_descricao.append(lbl_desc)
+
+            if not cancelado and lanc["documentos"]:
+                docs_frame = Frame(corpo, bg=fundo_card)
+                docs_frame.pack(fill=X, pady=(2, 6))
+                for nome_original, caminho_armazenado in lanc["documentos"]:
+                    criar_botao_sga(docs_frame, f"Documento: {nome_original}",
+                                    lambda c=caminho_armazenado: os.startfile(c), "neutro",
+                                    fonte=(SGA_FONTE, 9), padx=10, pady=3
+                                    ).pack(side=LEFT, padx=(0, 8))
+
+            if lanc["usuario"]:
+                Label(corpo, text=f"Lançado: {lanc['usuario']}", bg=fundo_card,
+                      font=(SGA_FONTE, 9, "italic"), fg=SGA_TEXTO_SUAVE).pack(anchor="e")
+
+            if cancelado:
+                Label(corpo, text=f"Cancelado – {lanc['cancelado_por']}", bg=fundo_card,
+                      font=(SGA_FONTE, 9, "italic"), fg=SGA_VERMELHO).pack(anchor="e")
+
+        ajustar_quebra_de_linha()
+
+    atualizar_cabecalho()
+    montar_historico()
+
+    def imprimir():
+        resposta = messagebox.askquestion(
+            "Imprimir Processo",
+            "Deseja excluir os lançamentos cancelados da impressão?",
+            parent=janela)
+        lancamentos_imprimir = estado["lancamentos"]
+        if resposta == "yes":
+            lancamentos_imprimir = [l for l in lancamentos_imprimir
+                                     if l["status"] != STATUS_LANCAMENTO_CANCELADO]
+        gerar_pdf_processo(titulo, localidade, lancamentos_imprimir,
+                            estado["status_processo"], estado["cancelado_por"])
+
+    def concluir():
+        confirmar = messagebox.askyesno(
+            "Confirmar Conclusão",
+            f"Deseja concluir o processo '{titulo}'?",
+            parent=janela)
+        if confirmar:
+            usuario = obter_nome_usuario_logado()
+            concluir_processo(processo_id)
+            agora = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
+            inserir_lancamento(processo_id, agora, usuario, f"Processo concluído pelo usuário: {usuario}")
+            messagebox.showinfo("Sucesso", "Processo concluído.", parent=janela)
+            janela.destroy()
+            callback_atualizar()
+
+    def voltar():
+        janela.destroy()
+        callback_atualizar()
+
+    rodape = criar_rodape_sga(janela)
+    criar_botao_sga(rodape, "IMPRIMIR", imprimir, "primario"
+                    ).place(relx=0.5, x=-240, rely=0.5, anchor="w", width=140, height=40)
+    criar_botao_sga(rodape, "VOLTAR", voltar, "aviso"
+                    ).place(relx=0.5, x=-70, rely=0.5, anchor="w", width=140, height=40)
+    criar_botao_sga(rodape, "CONCLUIR", concluir, "sucesso"
+                    ).place(relx=0.5, x=100, rely=0.5, anchor="w", width=140, height=40)
+
+
+def cmd_click24():
+    """Tela principal do SGA: índice de processos, em ordem alfabética, com rolagem,
+    botões C (Cancelar) / A (Atualizar) / V (Ver) por processo, busca por título e o
+    botão Novo Lançamento."""
+    global current_user
+    if not current_user:
+        messagebox.showwarning("Atenção", "Nenhum usuário está logado. Faça login primeiro.")
+        return
+
+    nome_logado = obter_nome_usuario_logado()
+    if not nome_logado:
+        messagebox.showwarning("Atenção", "Não foi possível identificar o usuário logado.")
+        return
+
+    garantir_banco_sga()
+
+    indice_win = Toplevel(root)
+    indice_win.title('COG - SGA')
+    indice_win.geometry('1000x700')
+    indice_win.minsize(1000, 700)
+    indice_win.resizable(True, True)
+    indice_win['bg'] = SGA_FUNDO
+
+    cabecalho = criar_cabecalho_sga(indice_win, 'Sistema de Gestão de Atividades - Índice de Processos',
+                                    altura=64)
+
+    # Campo de busca (lupa desenhada + texto de ajuda que some ao digitar)
+    busca_var = StringVar()
+    TEXTO_AJUDA_BUSCA = "Buscar por título..."
+    estado_busca = {"ajuda": True}
+
+    caixa_busca = Frame(cabecalho, bg="white")
+    caixa_busca.place(relx=1.0, x=-24, rely=0.5, anchor="e", width=250, height=34)
+    criar_icone_lupa(caixa_busca).pack(side=LEFT, padx=(8, 0))
+    entry_busca = Entry(caixa_busca, textvariable=busca_var, relief="flat", bd=0, bg="white",
+                        fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 10), insertbackground=SGA_TEXTO)
+    entry_busca.pack(side=LEFT, fill=BOTH, expand=True, padx=(4, 8), pady=6)
+    entry_busca.insert(0, TEXTO_AJUDA_BUSCA)
+
+    def ao_focar_busca(event=None):
+        if estado_busca["ajuda"]:
+            estado_busca["ajuda"] = False
+            entry_busca.delete(0, END)
+            entry_busca.config(fg=SGA_TEXTO)
+
+    def ao_sair_busca(event=None):
+        if not busca_var.get().strip():
+            estado_busca["ajuda"] = True
+            entry_busca.delete(0, END)
+            entry_busca.insert(0, TEXTO_AJUDA_BUSCA)
+            entry_busca.config(fg=SGA_TEXTO_SUAVE)
+
+    entry_busca.bind("<FocusIn>", ao_focar_busca)
+    entry_busca.bind("<FocusOut>", ao_sair_busca)
+
+    lista_frame = Frame(indice_win, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    lista_frame.place(x=24, y=84, relwidth=1.0, width=-48, relheight=1.0, height=-160)
+
+    inner_indice = criar_area_rolavel(lista_frame, bg=SGA_CARD)
+
+    # Rodapé: contador de processos, botão principal e legenda das cores
+    contador_label = Label(indice_win, text="", bg=SGA_FUNDO, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9))
+    contador_label.place(x=24, rely=1.0, y=-30, anchor="sw")
+
+    legenda = Frame(indice_win, bg=SGA_FUNDO)
+    legenda.place(relx=1.0, x=-24, rely=1.0, y=-30, anchor="se")
+    for cor_legenda, texto_legenda in (("black", "Aberto / Reaberto"), (SGA_VERDE, "Concluído"),
+                                        (SGA_VERMELHO, "Cancelado")):
+        Label(legenda, text="■", bg=SGA_FUNDO, fg=cor_legenda, font=(SGA_FONTE, 9)
+              ).pack(side=LEFT, padx=(12, 2))
+        Label(legenda, text=texto_legenda, bg=SGA_FUNDO, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9)
+              ).pack(side=LEFT)
+
+    def montar_indice():
+        for widget in inner_indice.winfo_children():
+            widget.destroy()
+
+        termo_busca = "" if estado_busca["ajuda"] else busca_var.get().strip().lower()
+
+        exibidos = [p for p in listar_processos() if not termo_busca or termo_busca in p[1].lower()]
+        contador_label.config(text=f"{len(exibidos)} processo(s)")
+
+        if not exibidos:
+            Label(inner_indice, text="Nenhum processo encontrado.", bg=SGA_CARD,
+                  fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 11)).pack(pady=60)
+            return
+
+        for posicao, (processo_id, titulo, localidade, status, cancelado_por) in enumerate(exibidos):
+            fundo_linha = SGA_CARD if posicao % 2 == 0 else "#F6F8FB"
+
+            linha = Frame(inner_indice, bg=fundo_linha)
+            linha.pack(fill=X)
+
+            texto_titulo = f"{titulo} - {localidade}"
+
+            if status == STATUS_CANCELADO:
+                fonte_titulo = (SGA_FONTE, 10, "overstrike")
+                cor_titulo = SGA_VERMELHO
+                cor_faixa = SGA_VERMELHO
+            elif status == STATUS_CONCLUIDO:
+                fonte_titulo = (SGA_FONTE, 10)
+                cor_titulo = SGA_VERDE
+                cor_faixa = SGA_VERDE
+            else:  # ABERTO ou REABERTO
+                fonte_titulo = (SGA_FONTE, 10)
+                cor_titulo = "black"
+                cor_faixa = "black"
+
+            Frame(linha, bg=cor_faixa, width=5).pack(side=LEFT, fill=Y)
+
+            Label(linha, text=texto_titulo, bg=fundo_linha, fg=cor_titulo, font=fonte_titulo,
+                  anchor="w", justify="left", wraplength=780
+                  ).pack(side=LEFT, fill=X, expand=True, padx=(14, 0), pady=9)
+
+            if status != STATUS_CANCELADO:
+                btn_c = criar_botao_sga(linha, "C", lambda pid=processo_id, tit=titulo: cancelar_este_processo(pid, tit),
+                                        "perigo", fonte=(SGA_FONTE, 9, "bold"), width=3, pady=2)
+                btn_c.pack(side=LEFT, padx=3, pady=6)
+                ToolTipSGA(btn_c, "Cancelar")
+
+            btn_a = criar_botao_sga(linha, "A", lambda pid=processo_id: abrir_atualizar(pid),
+                                    "primario", fonte=(SGA_FONTE, 9, "bold"), width=3, pady=2)
+            btn_a.pack(side=LEFT, padx=3, pady=6)
+            ToolTipSGA(btn_a, "Atualizar")
+
+            btn_v = criar_botao_sga(linha, "V", lambda pid=processo_id: abrir_ver(pid),
+                                    "sucesso", fonte=(SGA_FONTE, 9, "bold"), width=3, pady=2)
+            btn_v.pack(side=LEFT, padx=(3, 14), pady=6)
+            ToolTipSGA(btn_v, "Ver")
+
+            Frame(inner_indice, bg="#E5EAF1", height=1).pack(fill=X)
+
+    def cancelar_este_processo(processo_id, titulo_processo):
+        confirmar = messagebox.askyesno(
+            "Confirmar Cancelamento",
+            f"Deseja realmente cancelar o processo '{titulo_processo}'?\n\n"
+            f"Todo o histórico e os documentos serão mantidos; apenas o status "
+            f"passará a CANCELADO.",
+            parent=indice_win)
+        if confirmar:
+            justificativa = solicitar_justificativa(indice_win, titulo_processo)
+            if justificativa is None:
+                return
+            usuario = obter_nome_usuario_logado()
+            cancelar_processo(processo_id, usuario)
+            agora = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
+            descricao = (f"Processo cancelado pelo usuário: {usuario}\n"
+                         f"Justificativa: {justificativa}")
+            inserir_lancamento(processo_id, agora, usuario, descricao)
+            montar_indice()
+
+    def abrir_atualizar(processo_id=None):
+        if processo_id:
+            processo = buscar_processo(processo_id)
+            if processo and processo[3] in (STATUS_CANCELADO, STATUS_CONCLUIDO):
+                status_atual = processo[3]
+                acao_texto = "cancelado" if status_atual == STATUS_CANCELADO else "concluído"
+                resposta = messagebox.askquestion(
+                    f"Processo {status_atual}",
+                    f"O processo '{processo[1]}' está {acao_texto} e não permite novos "
+                    f"lançamentos.\n\nDeseja reabri-lo para incluir um novo lançamento?",
+                    parent=indice_win)
+                if resposta != "yes":
+                    return
+                reabrir_processo(processo_id)
+                usuario = obter_nome_usuario_logado()
+                agora = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
+                inserir_lancamento(processo_id, agora, usuario, f"Processo reaberto pelo usuário: {usuario}")
+                montar_indice()
+        tela_atualizar_novo_lancamento(indice_win, processo_id, montar_indice)
+
+    def abrir_ver(processo_id):
+        tela_ver_processo(indice_win, processo_id, montar_indice)
+
+    busca_var.trace_add("write", lambda *args: montar_indice())
+
+    montar_indice()
+
+    criar_botao_sga(indice_win, "Novo Lançamento", lambda: abrir_atualizar(None), "primario"
+                    ).place(relx=0.5, rely=1.0, y=-18, anchor="s", width=210, height=40)
+
+# =======cascate PRIMEIRA PARTE termina aqui
+
 
 # ---------------------------------------------------
 # FUNÇÕES RELACIONADAS AO LOGIN
@@ -9262,6 +10548,13 @@ fileAUTO_AVALIACAO.add_command(label="Responder Auto-Avaliação", command=cmd_c
 fileAUTO_AVALIACAO.add_separator()
 fileAUTO_AVALIACAO.add_command(label='Sair', command=root.quit)
 meuMenu.add_cascade(label="AUTO-AVALIAÇÃO", menu=fileAUTO_AVALIACAO)
+# ========cascate SEGUNDA PARTE termina aqui
+# ========cascate Click_24 - SEGUNDA PARTE inicia aqui
+fileSGA = Menu(meuMenu, tearoff=0)
+fileSGA.add_command(label="Sistema de Gestão de Atividades", command=cmd_click24)
+fileSGA.add_separator()
+fileSGA.add_command(label='Sair', command=root.quit)
+meuMenu.add_cascade(label="SGA", menu=fileSGA)
 # ========cascate SEGUNDA PARTE termina aqui
 
 ADMINMenu = Menu(meuMenu, tearoff=0)
