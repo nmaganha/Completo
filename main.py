@@ -1,4 +1,4 @@
-# Código atualizado em 19-09-26 – 1444 (possibilidade de excluir lançamento cancelado)
+# Código atualizado em 21-09-26 – deixar verde a barra da esquerda quando concluído)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -22,6 +22,492 @@ import threading  # exclusivo para o click22
 from concurrent.futures import ThreadPoolExecutor, as_completed #exclusivo para o click22
 from matplotlib.figure import Figure  # exclusivo para o click23
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # exclusivo para o click23
+
+# ===========================================================================================
+# TEMA VISUAL MODERNO - identidade única para TODAS as janelas do sistema
+# ===========================================================================================
+# Os componentes abaixo (Button, Label, Entry, Text, Toplevel, Frame, Checkbutton, ...) substituem
+# os componentes padrão do Tkinter em todo o programa. Eles aceitam exatamente os mesmos parâmetros
+# de antes, então nenhuma janela precisa ser reescrita: cores antigas são convertidas para a
+# paleta atual, fontes Arial passam para Segoe UI, botões ficam planos com efeito ao passar o
+# mouse e campos de texto ganham contorno que muda de cor ao receber o foco.
+# Componentes que já definem 'relief' (como os dos módulos Click_23 e Click_24, que já têm
+# visual próprio) são preservados como estão.
+import tkinter as _tk
+import tkinter.font as _tkfont
+
+UI_FONTE = "Segoe UI"
+UI_AZUL = "#024593"
+UI_AZUL_ESCURO = "#013573"
+UI_FUNDO = "#EEF2F7"
+UI_CARD = "#FFFFFF"
+UI_BORDA = "#D5DDE8"
+UI_TEXTO = "#1F2937"
+UI_TEXTO_SUAVE = "#6B7280"
+UI_VERDE = "#0A7A2E"
+UI_VERMELHO = "#B00000"
+UI_NEUTRO = "#E3E8EF"
+UI_NEUTRO_HOVER = "#D0D7E2"
+
+# Cores antigas -> cores da paleta atual (aplicado a qualquer opção de cor de qualquer componente)
+_UI_CORES = {
+    "#a4bad2": UI_FUNDO,       # fundo antigo das janelas
+    "#cdd505": UI_FUNDO,       # fundo antigo das janelas de filtro
+    "#f0f0f0": UI_FUNDO,
+    "#41719c": "#2F5F9E",      # painéis azuis dos simuladores
+    "#ff0000": "#C62828",      # vermelho (Novo Cálculo, Fechar, Cancelar...)
+    "#8b0000": "#8E1B1B",
+    "#ff8c00": "#CC8400",
+    "#808080": "#6B7280",
+    "#cdcdcd": UI_NEUTRO,
+    "#3498db": UI_AZUL,
+    "#2196f3": UI_AZUL,
+    "#1d9bff": UI_AZUL,
+    "#2ecc71": "#079541",
+    "#009f4d": "#079541",
+    "#fff3cd": "#FFF6DD",
+}
+# Nomes de cor usados como texto (fg) -> cores da paleta
+_UI_CORES_TEXTO = {
+    "blue": UI_AZUL,
+    "red": UI_VERMELHO,
+    "green": UI_VERDE,
+    "gray": UI_TEXTO_SUAVE,
+    "#555": UI_TEXTO_SUAVE,
+    "#666": UI_TEXTO_SUAVE,
+}
+_UI_OPCOES_COR = ("bg", "background", "fg", "foreground", "activebackground", "activeforeground",
+                  "highlightbackground", "highlightcolor", "selectbackground", "selectforeground",
+                  "disabledforeground", "insertbackground", "selectcolor", "troughcolor")
+_UI_OPCOES_TEXTO = ("fg", "foreground", "activeforeground", "disabledforeground")
+_UI_FONTES_ANTIGAS = ("arial", "helvetica", "tahoma", "verdana", "calibri", "times new roman")
+
+
+def _ui_cor(opcao, valor):
+    """Converte uma cor antiga para a cor equivalente da paleta atual."""
+    if isinstance(valor, str):
+        chave = valor.strip().lower()
+        if opcao in _UI_OPCOES_TEXTO and chave in _UI_CORES_TEXTO:
+            return _UI_CORES_TEXTO[chave]
+        if chave in _UI_CORES:
+            return _UI_CORES[chave]
+    return valor
+
+
+def _ui_fonte(valor):
+    """Troca a família Arial (e similares) por Segoe UI, mantendo tamanho e estilo."""
+    if isinstance(valor, (tuple, list)) and valor and isinstance(valor[0], str) \
+            and valor[0].strip().lower() in _UI_FONTES_ANTIGAS:
+        return (UI_FONTE,) + tuple(valor[1:])
+    return valor
+
+
+def _ui_ajustar(opcoes):
+    """Aplica a conversão de cores e fontes ao conjunto de opções de um componente."""
+    for opcao in list(opcoes):
+        if opcao in _UI_OPCOES_COR:
+            opcoes[opcao] = _ui_cor(opcao, opcoes[opcao])
+        elif opcao == "font":
+            opcoes[opcao] = _ui_fonte(opcoes[opcao])
+    return opcoes
+
+
+def _ui_juntar(cnf, kw):
+    opcoes = dict(cnf or {})
+    opcoes.update(kw)
+    return _ui_ajustar(opcoes)
+
+
+def _ui_escurecer(cor, fator=0.85):
+    """Devolve a cor um pouco mais escura (usada no efeito ao passar o mouse)."""
+    try:
+        r, g, b = [c // 257 for c in _tk._default_root.winfo_rgb(cor)]
+        return "#%02X%02X%02X" % (int(r * fator), int(g * fator), int(b * fator))
+    except Exception:
+        return cor
+
+
+def _ui_e_escura(cor):
+    try:
+        r, g, b = [c // 257 for c in _tk._default_root.winfo_rgb(cor)]
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 150
+    except Exception:
+        return False
+
+
+def _ui_fundo_do_pai(master):
+    try:
+        return master.cget("bg")
+    except Exception:
+        return UI_FUNDO
+
+
+class _TemaWidget:
+    """Mistura aplicada a todos os componentes: qualquer configure()/config()/widget['bg']=...
+    posterior também passa pela conversão de cores e fontes."""
+
+    def configure(self, cnf=None, **kw):
+        if isinstance(cnf, dict):
+            cnf = _ui_ajustar(dict(cnf))
+        if kw:
+            kw = _ui_ajustar(kw)
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+
+class Tk(_TemaWidget, _tk.Tk):
+    """Janela principal (e qualquer outra janela raiz): já nasce com o tema global aplicado."""
+
+    def __init__(self, *args, **kw):
+        _tk.Tk.__init__(self, *args, **kw)
+        _ui_aplicar_tema_global(self)
+
+
+class Toplevel(_TemaWidget, _tk.Toplevel):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "bg" not in kw and "background" not in kw:
+            kw["bg"] = UI_FUNDO
+        _tk.Toplevel.__init__(self, master, **kw)
+
+
+def _ui_contorno_fino(kw):
+    """Bordas 3D antigas (solid, ridge, groove, sunken) viram um contorno fino e suave."""
+    if kw.get("relief") in ("solid", "ridge", "groove", "sunken", "raised"):
+        for opcao in ("relief", "bd", "borderwidth"):
+            kw.pop(opcao, None)
+        kw.update(relief="flat", bd=0, highlightthickness=1, highlightbackground=UI_BORDA,
+                  highlightcolor=UI_BORDA)
+    return kw
+
+
+class Frame(_TemaWidget, _tk.Frame):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_contorno_fino(_ui_juntar(cnf, kw))
+        if "bg" not in kw and "background" not in kw:
+            kw["bg"] = _ui_fundo_do_pai(master)
+        if kw.get("highlightthickness") and "highlightcolor" not in kw:
+            kw["highlightcolor"] = kw.get("highlightbackground", kw["bg"])   # sem contorno preto ao focar
+        _tk.Frame.__init__(self, master, **kw)
+
+
+class LabelFrame(_TemaWidget, _tk.LabelFrame):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_contorno_fino(_ui_juntar(cnf, kw))
+        if "bg" not in kw and "background" not in kw:
+            kw["bg"] = _ui_fundo_do_pai(master)
+        if "relief" not in kw:
+            kw.update(relief="flat", bd=0, highlightthickness=1, highlightbackground=UI_BORDA,
+                      highlightcolor=UI_BORDA)
+        _tk.LabelFrame.__init__(self, master, **kw)
+
+
+class Label(_TemaWidget, _tk.Label):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "bg" not in kw and "background" not in kw:
+            kw["bg"] = _ui_fundo_do_pai(master)
+        _tk.Label.__init__(self, master, **kw)
+
+    def _ui_e_titulo(self):
+        """Faixa azul de título de janela: fundo azul, texto branco, negrito e tamanho 14 ou mais."""
+        try:
+            fonte = _tkfont.Font(font=self.cget("font"))
+            return (str(self.cget("bg")).lower() == UI_AZUL.lower() and str(self.cget("fg")).lower() == "white"
+                    and fonte.actual("weight") == "bold" and abs(fonte.actual("size")) >= 14)
+        except Exception:
+            return False
+
+    def _ui_estilo_titulo(self):
+        _tk.Label.configure(self, anchor="w", padx=24, font=(UI_FONTE, 15, "bold"))
+
+    def place_configure(self, cnf={}, **kw):
+        """Título no topo da janela: passa a acompanhar a largura da janela (permite maximizar) e fica
+        alinhado à esquerda, como nos módulos novos."""
+        opcoes = dict(cnf)
+        opcoes.update(kw)
+        if (opcoes.get("relx") == 0 and opcoes.get("rely") == 0 and opcoes.get("height") == 60
+                and (opcoes.get("width") or 0) >= 1000 and self._ui_e_titulo()):
+            opcoes.pop("width")
+            opcoes["relwidth"] = 1.0
+            self._ui_estilo_titulo()
+        return super().place_configure(**opcoes)
+
+    place = place_configure
+
+    def pack_configure(self, cnf={}, **kw):
+        opcoes = dict(cnf)
+        opcoes.update(kw)
+        if opcoes.get("fill") in ("x", "both", X) and self._ui_e_titulo():
+            self._ui_estilo_titulo()
+        return super().pack_configure(**opcoes)
+
+    pack = pack_configure
+
+
+class Button(_TemaWidget, _tk.Button):
+    """Botão plano, com efeito ao passar o mouse (no lugar do botão 3D padrão)."""
+
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        self._ui_estilado = "relief" not in kw
+        if self._ui_estilado:
+            fundo = kw.get("bg", kw.get("background"))
+            if fundo is not None and str(fundo).lower() in (UI_FUNDO.lower(), "systembuttonface"):
+                fundo = None            # botão "sem cor" (ficaria invisível): vira o botão neutro com contorno
+                kw.pop("bg", None)
+                kw.pop("background", None)
+            if fundo is None:
+                fundo, hover, texto = "white", "#EAF0F8", UI_TEXTO
+                kw.setdefault("highlightbackground", "#C3CFE0")
+                kw.setdefault("highlightthickness", 1)
+            else:
+                hover = _ui_escurecer(fundo)
+                texto = "white" if _ui_e_escura(fundo) else UI_TEXTO
+            texto = kw.get("fg", kw.get("foreground", texto))
+            kw.pop("background", None)
+            kw.update(bg=fundo, fg=texto, activebackground=hover, activeforeground=texto,
+                      relief="flat", bd=0, cursor="hand2")
+            kw.setdefault("highlightthickness", 0)
+            kw.setdefault("font", (UI_FONTE, 9, "bold"))
+            if "width" not in kw:
+                kw.setdefault("padx", 6)
+            if "height" not in kw:
+                kw.setdefault("pady", 2)
+            self._ui_fundo, self._ui_hover = fundo, hover
+        _tk.Button.__init__(self, master, **kw)
+        if self._ui_estilado:
+            self.bind("<Enter>", self._ui_entrar)
+            self.bind("<Leave>", self._ui_sair)
+
+    def _ui_entrar(self, evento=None):
+        if str(self.cget("state")) != "disabled":
+            _tk.Button.configure(self, bg=self._ui_hover)
+
+    def _ui_sair(self, evento=None):
+        _tk.Button.configure(self, bg=self._ui_fundo)
+
+    def configure(self, cnf=None, **kw):
+        resultado = _TemaWidget.configure(self, cnf, **kw)
+        novo = kw.get("bg", kw.get("background"))
+        if novo is not None and getattr(self, "_ui_estilado", False):
+            novo = _ui_cor("bg", novo)
+            self._ui_fundo, self._ui_hover = novo, _ui_escurecer(novo)
+        return resultado
+
+    config = configure
+
+
+class Entry(_TemaWidget, _tk.Entry):
+    """Campo de uma linha, plano, com contorno que muda de cor ao receber o foco."""
+
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "relief" not in kw:
+            kw.update(relief="flat", bd=2, highlightthickness=1, highlightbackground=UI_BORDA,
+                      highlightcolor=UI_AZUL)
+            kw.setdefault("bg", "white")
+            kw.setdefault("fg", UI_TEXTO)
+            kw.setdefault("insertbackground", UI_TEXTO)
+            kw.setdefault("disabledbackground", "#EEF1F6")
+            kw.setdefault("readonlybackground", "#EEF1F6")
+            kw.setdefault("disabledforeground", UI_TEXTO_SUAVE)
+        _tk.Entry.__init__(self, master, **kw)
+
+
+class Text(_TemaWidget, _tk.Text):
+    """Área de texto de várias linhas, plana, com margem interna e contorno com foco."""
+
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "relief" not in kw or kw.get("relief") in ("solid", "sunken", "groove", "ridge"):
+            kw.pop("borderwidth", None)
+            kw.update(relief="flat", bd=0, highlightthickness=1, highlightbackground=UI_BORDA,
+                      highlightcolor=UI_AZUL)
+            kw.setdefault("padx", 8)
+            kw.setdefault("pady", 6)
+            kw.setdefault("fg", UI_TEXTO)
+            kw.setdefault("insertbackground", UI_TEXTO)
+        _tk.Text.__init__(self, master, **kw)
+
+
+class _Selecao(_TemaWidget):
+    """Base de Checkbutton e Radiobutton: mesmo fundo do local onde estão e fonte moderna."""
+
+    @staticmethod
+    def _preparar(master, kw):
+        if "bg" not in kw and "background" not in kw:
+            kw["bg"] = _ui_fundo_do_pai(master)
+        if "relief" not in kw:
+            kw.setdefault("activebackground", kw["bg"])
+            kw.setdefault("fg", UI_TEXTO)
+            kw.setdefault("activeforeground", UI_TEXTO)
+            kw.setdefault("selectcolor", "white")
+            kw.setdefault("cursor", "hand2")
+        return kw
+
+
+class Checkbutton(_Selecao, _tk.Checkbutton):
+    def __init__(self, master=None, cnf={}, **kw):
+        _tk.Checkbutton.__init__(self, master, **self._preparar(master, _ui_juntar(cnf, kw)))
+
+
+class Radiobutton(_Selecao, _tk.Radiobutton):
+    def __init__(self, master=None, cnf={}, **kw):
+        _tk.Radiobutton.__init__(self, master, **self._preparar(master, _ui_juntar(cnf, kw)))
+
+
+class Listbox(_TemaWidget, _tk.Listbox):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "relief" not in kw:
+            kw.update(relief="flat", bd=0, highlightthickness=1, highlightbackground=UI_BORDA,
+                      highlightcolor=UI_AZUL, activestyle="none")
+            kw.setdefault("bg", "white")
+            kw.setdefault("fg", UI_TEXTO)
+            kw.setdefault("selectbackground", "#DCE8F8")
+            kw.setdefault("selectforeground", UI_TEXTO)
+        _tk.Listbox.__init__(self, master, **kw)
+
+
+class Spinbox(_TemaWidget, _tk.Spinbox):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        if "relief" not in kw:
+            kw.update(relief="flat", bd=2, highlightthickness=1, highlightbackground=UI_BORDA,
+                      highlightcolor=UI_AZUL)
+            kw.setdefault("bg", "white")
+            kw.setdefault("fg", UI_TEXTO)
+        _tk.Spinbox.__init__(self, master, **kw)
+
+
+class Menu(_TemaWidget, _tk.Menu):
+    def __init__(self, master=None, cnf={}, **kw):
+        kw = _ui_juntar(cnf, kw)
+        kw.setdefault("font", (UI_FONTE, 10))
+        kw.setdefault("bg", "white")
+        kw.setdefault("fg", UI_TEXTO)
+        kw.setdefault("activebackground", "#DCE8F8")
+        kw.setdefault("activeforeground", UI_TEXTO)
+        _tk.Menu.__init__(self, master, **kw)
+
+
+class Scrollbar(ttk.Scrollbar):
+    """Barra de rolagem fina e plana (a barra padrão do Tk não aceita cores no Windows)."""
+
+    def __init__(self, master=None, cnf={}, **kw):
+        opcoes = dict(cnf)
+        opcoes.update(kw)
+        for opcao in ("bg", "background", "troughcolor", "activebackground", "relief", "bd", "borderwidth",
+                      "width", "highlightthickness", "highlightbackground", "highlightcolor", "elementborderwidth",
+                      "jump", "repeatdelay", "repeatinterval"):
+            opcoes.pop(opcao, None)
+        ttk.Scrollbar.__init__(self, master, **opcoes)
+
+
+_CalendarioOriginal = Calendar
+
+
+class Calendar(_CalendarioOriginal):
+    """Calendário nas cores do sistema e em português (a data continua no mesmo formato de antes)."""
+
+    def __init__(self, master=None, **kw):
+        kw.setdefault("background", UI_AZUL_ESCURO)
+        kw.setdefault("foreground", "white")
+        kw.setdefault("headersbackground", UI_AZUL)
+        kw.setdefault("headersforeground", "white")
+        kw.setdefault("selectbackground", UI_AZUL)
+        kw.setdefault("selectforeground", "white")
+        kw.setdefault("normalbackground", "white")
+        kw.setdefault("normalforeground", UI_TEXTO)
+        kw.setdefault("weekendbackground", "#F3F6FB")
+        kw.setdefault("weekendforeground", UI_TEXTO)
+        kw.setdefault("othermonthbackground", UI_FUNDO)
+        kw.setdefault("othermonthwebackground", UI_FUNDO)
+        kw.setdefault("othermonthforeground", UI_TEXTO_SUAVE)
+        kw.setdefault("othermonthweforeground", UI_TEXTO_SUAVE)
+        kw.setdefault("bordercolor", UI_BORDA)
+        kw.setdefault("font", (UI_FONTE, 10))
+        try:
+            _CalendarioOriginal.__init__(self, master, locale="pt_BR", **kw)
+        except Exception:                      # sem o pacote de idiomas (babel): calendário em inglês, como antes
+            _CalendarioOriginal.__init__(self, master, **kw)
+
+
+def _ui_aplicar_tema_global(janela_raiz):
+    """Fontes padrão, estilos ttk (caixas de seleção, tabelas, barras) e cores das listas suspensas.
+    É chamada automaticamente por cada janela raiz (Tk) no momento em que ela é criada."""
+    for nome_fonte in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont", "TkCaptionFont"):
+        try:
+            _tkfont.nametofont(nome_fonte, root=janela_raiz).configure(family=UI_FONTE)
+        except _tk.TclError:
+            pass
+
+    estilo = ttk.Style(janela_raiz)
+    try:
+        estilo.theme_use("clam")
+    except _tk.TclError:
+        pass
+
+    estilo.configure("TCombobox", fieldbackground="white", background=UI_NEUTRO, foreground=UI_TEXTO,
+                     bordercolor=UI_BORDA, lightcolor=UI_BORDA, darkcolor=UI_BORDA, arrowcolor=UI_TEXTO_SUAVE,
+                     arrowsize=14, padding=(6, 2), relief="flat")
+    estilo.map("TCombobox",
+               fieldbackground=[("readonly", "white"), ("disabled", "#EEF1F6")],
+               foreground=[("readonly", UI_TEXTO), ("disabled", UI_TEXTO_SUAVE)],
+               selectbackground=[("readonly", "white")], selectforeground=[("readonly", UI_TEXTO)],
+               bordercolor=[("focus", UI_AZUL), ("active", UI_AZUL)],
+               background=[("active", UI_NEUTRO_HOVER)],
+               arrowcolor=[("active", UI_AZUL)])
+    janela_raiz.option_add("*TCombobox*Listbox.font", (UI_FONTE, 10))
+    janela_raiz.option_add("*TCombobox*Listbox.selectBackground", UI_AZUL)
+    janela_raiz.option_add("*TCombobox*Listbox.selectForeground", "white")
+    janela_raiz.option_add("*TCombobox*Listbox.background", "white")
+
+    estilo.configure("Treeview", background="white", fieldbackground="white", foreground=UI_TEXTO,
+                     rowheight=26, borderwidth=0, font=(UI_FONTE, 10))
+    estilo.configure("Treeview.Heading", background=UI_AZUL, foreground="white", relief="flat",
+                     font=(UI_FONTE, 10, "bold"), padding=(6, 6))
+    estilo.map("Treeview.Heading", background=[("active", UI_AZUL_ESCURO)])
+    estilo.map("Treeview", background=[("selected", "#DCE8F8")], foreground=[("selected", UI_TEXTO)])
+
+    estilo.configure("Horizontal.TProgressbar", troughcolor="#E5EAF1", background=UI_AZUL,
+                     bordercolor=UI_BORDA, lightcolor=UI_AZUL, darkcolor=UI_AZUL)
+
+    for orientacao in ("Vertical", "Horizontal"):
+        estilo.configure(f"{orientacao}.TScrollbar", background="#C9D3E0", troughcolor=UI_FUNDO,
+                         bordercolor=UI_FUNDO, arrowcolor=UI_TEXTO_SUAVE, lightcolor="#C9D3E0",
+                         darkcolor="#C9D3E0", relief="flat")
+        estilo.map(f"{orientacao}.TScrollbar", background=[("active", "#A9B7CB"), ("pressed", UI_AZUL)])
+
+
+def ui_dialogo(janela, titulo, subtitulo=None, altura_faixa=64):
+    """Faixa azul de título de um pequeno diálogo, com o título alinhado à esquerda."""
+    faixa = Frame(janela, bg=UI_AZUL)
+    faixa.place(x=0, y=0, relwidth=1.0, height=altura_faixa)
+    Label(faixa, text=titulo, bg=UI_AZUL, fg="white", font=(UI_FONTE, 15, "bold")).place(
+        x=24, rely=0.5 if not subtitulo else 0.36, anchor="w")
+    if subtitulo:
+        Label(faixa, text=subtitulo, bg=UI_AZUL, fg="#B8CCE8", font=(UI_FONTE, 9)).place(x=24, rely=0.72, anchor="w")
+    return faixa
+
+
+def ui_cartao(janela, y, altura):
+    """Cartão branco com contorno fino onde ficam os campos do diálogo."""
+    cartao = Frame(janela, bg=UI_CARD, highlightthickness=1, highlightbackground=UI_BORDA)
+    cartao.place(x=24, y=y, relwidth=1.0, width=-48, height=altura)
+    return cartao
+
+
+def ui_campo(cartao, texto, y, **opcoes_entry):
+    """Rótulo pequeno + campo de texto de uma linha (largura total do cartão). Devolve o Entry."""
+    Label(cartao, text=texto, bg=UI_CARD, fg=UI_TEXTO_SUAVE, font=(UI_FONTE, 9, "bold")).place(x=20, y=y)
+    entrada = Entry(cartao, font=(UI_FONTE, 11), **opcoes_entry)
+    entrada.place(x=20, y=y + 24, relwidth=1.0, width=-40, height=34)
+    return entrada
+
+# ================================== fim do TEMA VISUAL MODERNO =============================
 
 # ---------------------------------------------------
 # VARIÁVEL DE CONTROLE DE LOGIN
@@ -1392,7 +1878,8 @@ def cmd_click1():
     info_relev = Toplevel(root)
     info_relev.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     info_relev.geometry('1100x667')
-    info_relev.resizable(False, False)
+    info_relev.resizable(True, True)
+    info_relev.minsize(1100, 667)
     info_relev['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -1527,7 +2014,8 @@ def cmd_click2():
     alar_sinal = Toplevel(root)
     alar_sinal.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     alar_sinal.geometry('1100x667')
-    alar_sinal.resizable(False, False)
+    alar_sinal.resizable(True, True)
+    alar_sinal.minsize(1100, 667)
     alar_sinal['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -1678,7 +2166,8 @@ def cmd_click3():
     anom_telem = Toplevel(root)
     anom_telem.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     anom_telem.geometry('1100x667')
-    anom_telem.resizable(False, False)
+    anom_telem.resizable(True, True)
+    anom_telem.minsize(1100, 667)
     anom_telem['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -1819,7 +2308,8 @@ def cmd_click4():
     comp_disp = Toplevel(root)
     comp_disp.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     comp_disp.geometry('1100x667')
-    comp_disp.resizable(False, False)
+    comp_disp.resizable(True, True)
+    comp_disp.minsize(1100, 667)
     comp_disp['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2008,7 +2498,8 @@ def cmd_click5():
     comut_malha = Toplevel(root)
     comut_malha.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     comut_malha.geometry('1100x667')
-    comut_malha.resizable(False, False)
+    comut_malha.resizable(True, True)
+    comut_malha.minsize(1100, 667)
     comut_malha['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2028,6 +2519,7 @@ def cmd_click5():
                                                                                                              rely=0.15,
                                                                                                              anchor="w")
     Label(comut_malha, text='Cancelar Registro ou \n Inserir Data-Hora Término', bg="#a4bad2").place(relx=0.83,
+                                                                                                     rely=0.15,
                                                                                                      anchor="w")
     # Campos de Data e Hora de Término
     Label(comut_malha, text='Data e Hora de Término:', bg="#a4bad2").place(relx=0.05, rely=0.25, anchor="w")
@@ -2189,7 +2681,8 @@ def cmd_click6():
     cont_balsa = Toplevel(root)
     cont_balsa.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     cont_balsa.geometry('1100x667')
-    cont_balsa.resizable(False, False)
+    cont_balsa.resizable(True, True)
+    cont_balsa.minsize(1100, 667)
     cont_balsa['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2329,7 +2822,8 @@ def cmd_click7():
     desc_parc = Toplevel(root)
     desc_parc.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     desc_parc.geometry('1100x667')
-    desc_parc.resizable(False, False)
+    desc_parc.resizable(True, True)
+    desc_parc.minsize(1100, 667)
     desc_parc['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2490,7 +2984,8 @@ def cmd_click8():
     falh_comm = Toplevel(root)
     falh_comm.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     falh_comm.geometry('1100x667')
-    falh_comm.resizable(False, False)
+    falh_comm.resizable(True, True)
+    falh_comm.minsize(1100, 667)
     falh_comm['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2661,7 +3156,8 @@ def cmd_click9():
     falh_sdsc = Toplevel(root)
     falh_sdsc.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     falh_sdsc.geometry('1100x650')
-    falh_sdsc.resizable(False, False)
+    falh_sdsc.resizable(True, True)
+    falh_sdsc.minsize(1100, 650)
     falh_sdsc['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -2681,7 +3177,7 @@ def cmd_click9():
                                                                                                            rely=0.15,
                                                                                                            anchor="w")
     Label(falh_sdsc, text='Cancelar Registro ou \n Inserir Data-Hora Término', bg="#a4bad2").place(relx=0.83,
-                                                                                                   rely=0.15),
+                                                                                                   rely=0.15, anchor="w")
     # Campos de Data e Hora de Término
     Label(falh_sdsc, text='Data e Hora de Término:', bg="#a4bad2").place(relx=0.05, rely=0.25, anchor="w")
     entry_termino = Entry(falh_sdsc, width=30)
@@ -2693,7 +3189,7 @@ def cmd_click9():
     # ComboBox para Localidade
     Label(falh_sdsc, text='Localidade:', bg="#a4bad2").place(relx=0.05, rely=0.35, anchor="w"),
     localidades = ["COG-P", "COG-R", "UHE MGP", "UHE FGO", "UHE SJO", "PCH LAV", "PCH QUE", "PCH VIE", "CGE PTM",
-                   "CGE JDT", "UFV PTM", "SE IGU", "SE MCP", "SE CLA", "SE SCA", "SE IPG", "SE RSD", "SE JDD"],
+                   "CGE JDT", "UFV PTM", "SE IGU", "SE MCP", "SE CLA", "SE SCA", "SE IPG", "SE RSD", "SE JDD"]
     combobox_localidade = ttk.Combobox(falh_sdsc, values=localidades, state="readonly")
     combobox_localidade.place(relx=0.2, rely=0.35, width=200, height=25, anchor="w")
 
@@ -2833,7 +3329,8 @@ def cmd_click10():
     pert_equip = Toplevel(root)
     pert_equip.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     pert_equip.geometry('1100x667')
-    pert_equip.resizable(False, False)
+    pert_equip.resizable(True, True)
+    pert_equip.minsize(1100, 667)
     pert_equip['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3008,7 +3505,8 @@ def cmd_click11():
     falh_saca = Toplevel(root)
     falh_saca.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     falh_saca.geometry('1100x667')
-    falh_saca.resizable(False, False)
+    falh_saca.resizable(True, True)
+    falh_saca.minsize(1100, 667)
     falh_saca['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3180,7 +3678,8 @@ def cmd_click12():
     info_ons = Toplevel(root)
     info_ons.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     info_ons.geometry('1100x667')
-    info_ons.resizable(False, False)
+    info_ons.resizable(True, True)
+    info_ons.minsize(1100, 667)
     info_ons['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3321,7 +3820,8 @@ def cmd_click13():
     trans_paqu = Toplevel(root)
     trans_paqu.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     trans_paqu.geometry('1100x667')
-    trans_paqu.resizable(False, False)
+    trans_paqu.resizable(True, True)
+    trans_paqu.minsize(1100, 667)
     trans_paqu['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3493,7 +3993,8 @@ def cmd_click14():
     habil_ece = Toplevel(root)
     habil_ece.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     habil_ece.geometry('1100x667')
-    habil_ece.resizable(False, False)
+    habil_ece.resizable(True, True)
+    habil_ece.minsize(1100, 667)
     habil_ece['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3635,7 +4136,8 @@ def cmd_click15():
     saca_agente = Toplevel(root)
     saca_agente.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     saca_agente.geometry('1100x667')
-    saca_agente.resizable(False, False)
+    saca_agente.resizable(True, True)
+    saca_agente.minsize(1100, 667)
     saca_agente['bg'] = "#a4bad2"
 
     # Cabeçalho do página
@@ -3809,7 +4311,8 @@ def cmd_click16():
     tag_avato = Toplevel(root)
     tag_avato.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     tag_avato.geometry('1100x667')
-    tag_avato.resizable(False, False)
+    tag_avato.resizable(True, True)
+    tag_avato.minsize(1100, 667)
     tag_avato['bg'] = "#a4bad2"
     # Cabeçalho do página
     Label(tag_avato, text='Cadastro ou Atualização da Relação de TAGs da ÁVATO', font=('Arial', 14, 'bold'),
@@ -3982,7 +4485,8 @@ def cmd_click17():
     protocolo = Toplevel(root)
     protocolo.title('COG-ALUPAR - INFORMAÇÕES DE TROCA DE TURNO')
     protocolo.geometry('1100x667')
-    protocolo.resizable(False, False)
+    protocolo.resizable(True, True)
+    protocolo.minsize(1100, 667)
     protocolo['bg'] = "#a4bad2"
     # Cabeçalho do página
     Label(protocolo, text='Cadastro ou Atualização dos Dados para abertura de Protocolos nas Concessionárias',
@@ -4179,7 +4683,6 @@ def cmd_click17():
     # SIMULADOR PARA TRIP NA UHE FGO
     # ---------------------------------------------------
 
-
 """
 # Dicionário global para armazenar as referências dos campos de entrada
 entries = {}
@@ -4218,17 +4721,17 @@ def cmd_click18():
 
     sim_trip_fgo = Toplevel(root)
     sim_trip_fgo.title('COG-ALUPAR - SIMULAR TRIP NA UHE FERREIRA GOMES')
-    sim_trip_fgo.geometry('1200x667')
+    sim_trip_fgo.geometry('1200x710')
     sim_trip_fgo.resizable(False, False)
     sim_trip_fgo['bg'] = "#a4bad2"
 
     # Frame a esquerda para a inserção dos dados
     left_frame = Frame(sim_trip_fgo, borderwidth=1, relief="solid", bg="#a4bad2")
-    left_frame.place(x=5, y=85, width=400, height=570)
+    left_frame.place(x=5, y=85, width=400, height=613)
 
     # Frame a direita para exibir os resultados
     right_frame = Frame(sim_trip_fgo, borderwidth=1, relief="solid", bg="#F0F0F0")
-    right_frame.place(x=400, y=85, width=790, height=570)
+    right_frame.place(x=400, y=85, width=790, height=613)
 
     # Título
     lf1 = Label(sim_trip_fgo, text='Simulador para o caso de TRIP na UHE FGO', font=('Arial', 14, 'bold'),
@@ -5352,9 +5855,9 @@ def cmd_click20():
     lf2.place(x=650, y=62)
 
     # LABEL DO CABEÇALHO - Vamos armazenar em uma variável para poder controlar sua visibilidade
-    lf3 = Label(sim_nivel_fgo,
+    lf3 = _tk.Label(sim_nivel_fgo,
                 text="Data/Hora       |    Mont.    |  Jus.   |    HB    |  MW_U1  |  MW_U2  |  MW_U3  | UGV |    Aflu.   |    Turb.    |   Vert.    |    Defl.    |  Ab_CS1 | Ab_CS2 | Ab_CS3 |    Delta1   |   Delta2   |   Delta3   |    Var(m)",
-                bg="#a4bad2", font=("Arial", 10))
+                bg=UI_FUNDO, font=("Arial", 10))
     lf3.place(x=320, y=95)
 
     # INÍCIO dos Campos para inserção dos dados preliminares
@@ -9164,6 +9667,9 @@ STATUS_CONCLUIDO = "CONCLUÍDO"
 
 STATUS_LANCAMENTO_ATIVO = "ATIVO"
 STATUS_LANCAMENTO_CANCELADO = "CANCELADO"
+# Texto que abre a descrição do lançamento automático gerado ao concluir um processo.
+# Esse lançamento não pode ser cancelado nem excluído (não recebe os botões na tela).
+PREFIXO_DESCRICAO_CONCLUSAO = "Processo concluído pelo usuário:"
 
 LIMITE_PAGINAS_AVISO = 40
 # Usuários autorizados a excluir definitivamente um lançamento já cancelado
@@ -9954,10 +10460,16 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
 
         for lanc in estado["lancamentos"]:
             cancelado = lanc["status"] == STATUS_LANCAMENTO_CANCELADO
+            lancamento_conclusao = str(lanc["descricao"] or "").startswith(PREFIXO_DESCRICAO_CONCLUSAO)
 
             fundo_card = "#FBF1F1" if cancelado else SGA_CARD
             borda_card = "#E8C9C9" if cancelado else SGA_BORDA
-            cor_faixa = SGA_VERMELHO if cancelado else SGA_AZUL
+            if cancelado:
+                cor_faixa = SGA_VERMELHO
+            elif lancamento_conclusao:
+                cor_faixa = SGA_VERDE  # barra lateral verde no lançamento da conclusão do processo
+            else:
+                cor_faixa = SGA_AZUL
             cor_lanc = SGA_VERMELHO if cancelado else SGA_TEXTO
 
             card_lanc = Frame(inner_historico, bg=fundo_card, highlightthickness=1,
@@ -9976,6 +10488,11 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
                   fg=cor_lanc).pack(side=LEFT)
 
             if not cancelado:
+                lancamento_conclusao = str(lanc["descricao"] or "").startswith(PREFIXO_DESCRICAO_CONCLUSAO)
+
+            if lancamento_conclusao:
+                pass  # lançamento da conclusão do processo: sem botões "Cancelar" e "Excluir"
+            elif not cancelado:
                 criar_botao_sga(topo, "Cancelar", lambda lid=lanc["id"]: cancelar_este_lancamento(lid),
                                 "neutro", fonte=(SGA_FONTE, 8), padx=8, pady=1
                                 ).pack(side=LEFT, padx=12)
@@ -10300,24 +10817,17 @@ def trocar_senha(usuario):
 
     janela_troca_senha = Toplevel(root)
     janela_troca_senha.title("Trocar Senha")
-    janela_troca_senha.geometry("300x260")
+    janela_troca_senha.geometry("380x360")
     janela_troca_senha.resizable(False, False)
-    janela_troca_senha['bg'] = '#024593'
+    janela_troca_senha['bg'] = UI_FUNDO
 
-    Label(janela_troca_senha, text="Nova Senha:", font=('arial', 10, 'bold'), fg='white', bg='#024593').place(relx=0.37,
-                                                                                                              rely=0.1)
-    entry_nova_senha = Entry(janela_troca_senha, show="*")
-    entry_nova_senha.place(relx=0.17, rely=0.2, width=200, height=30)
-
-    Label(janela_troca_senha, text="Confirmar Senha:", font=('arial', 10, 'bold'), fg='white', bg='#024593').place(
-        relx=0.32, rely=0.4)
-    entry_confirmar_senha = Entry(janela_troca_senha, show="*")
-    entry_confirmar_senha.place(relx=0.17, rely=0.5, width=200, height=30)
-
-    Button(janela_troca_senha, fg='#024593', text="Salvar", font=('arial', 10, 'bold'),
-           command=salvar_nova_senha).place(relx=0.37,
-                                            rely=0.83,
-                                            width=75)
+    ui_dialogo(janela_troca_senha, "Trocar Senha", "Defina uma nova senha para continuar")
+    cartao_troca = ui_cartao(janela_troca_senha, 84, 250)
+    entry_nova_senha = ui_campo(cartao_troca, "Nova senha", 18, show="*")
+    entry_confirmar_senha = ui_campo(cartao_troca, "Confirmar senha", 88, show="*")
+    Button(cartao_troca, text="Salvar", bg=UI_AZUL, fg="white", font=(UI_FONTE, 11, "bold"),
+           command=salvar_nova_senha).place(x=20, y=184, relwidth=1.0, width=-40, height=42)
+    entry_nova_senha.focus_set()
     janela_troca_senha.bind('<Return>', lambda event: salvar_nova_senha())
 
 
@@ -10343,17 +10853,18 @@ def resetar_senha():
 
     janela_reset_senha = Toplevel(root)
     janela_reset_senha.title("Resetar Senha")
-    janela_reset_senha.geometry("300x200")
+    janela_reset_senha.geometry("380x330")
     janela_reset_senha.resizable(False, False)
-    janela_reset_senha['bg'] = '#024593'
+    janela_reset_senha['bg'] = UI_FUNDO
 
-    Label(janela_reset_senha, bg='#024593', fg='white', text="Usuário:", font=('arial', 10, 'bold')).place(relx=0.4,
-                                                                                                           rely=0.15)
-    entry_usuario_reset = Entry(janela_reset_senha)
-    entry_usuario_reset.place(relx=0.15, rely=0.30, width=210, height=30)
-
-    Button(janela_reset_senha, fg='#024593', text="Resetar", font=('arial', 10, 'bold'),
-           command=confirmar_reset).place(relx=0.35, rely=0.60, width=80)
+    ui_dialogo(janela_reset_senha, "Resetar Senha", "Somente para administradores")
+    cartao_reset = ui_cartao(janela_reset_senha, 84, 220)
+    entry_usuario_reset = ui_campo(cartao_reset, "Usuário", 18)
+    Label(cartao_reset, text="A senha volta ao padrão e será trocada no próximo acesso.", bg=UI_CARD,
+          fg=UI_TEXTO_SUAVE, font=(UI_FONTE, 9), wraplength=290, justify="left").place(x=20, y=88)
+    Button(cartao_reset, text="Resetar", bg=UI_AZUL, fg="white", font=(UI_FONTE, 11, "bold"),
+           command=confirmar_reset).place(x=20, y=150, relwidth=1.0, width=-40, height=42)
+    entry_usuario_reset.focus_set()
     janela_reset_senha.bind('<Return>', lambda event: confirmar_reset())
 
 
@@ -10369,23 +10880,17 @@ def criar_tela_login():
 
     login_window = Toplevel(root)
     login_window.title("Login - Troca de Turno")
-    login_window.geometry("300x260")
+    login_window.geometry("380x420")
     login_window.resizable(False, False)
-    login_window['bg'] = "#024593"
+    login_window['bg'] = UI_FUNDO
 
-    lb6 = Label(login_window, text="Usuário:", fg="white", bg='#024593', font=('arial', 11, 'bold'))
-    lb6.place(relx=0.25, rely=0.09, width=150)
-    entry_usuario = Entry(login_window)
-    entry_usuario.place(relx=0.22, rely=0.20, width=170, height=30)
-
-    lb7 = Label(login_window, text="Senha:", fg="white", bg='#024593', font=('arial', 11, 'bold'))
-    lb7.place(relx=0.25, rely=0.39, width=150)
-    entry_senha = Entry(login_window, show="*")
-    entry_senha.place(relx=0.22, rely=0.50, width=170, height=30)
-
-    bt1 = Button(login_window, text="Entrar", width=12, font=('Arial', 11, 'bold'), fg='#024593',
-                 overrelief="sunken", highlightthickness=2, command=realizar_login)
-    bt1.place(relx=0.35, rely=0.75, width=100)
+    ui_dialogo(login_window, "Troca de Turno", "COG - Centro de Operação da Geração", altura_faixa=96)
+    cartao_login = ui_cartao(login_window, 120, 264)
+    entry_usuario = ui_campo(cartao_login, "Usuário", 20)
+    entry_senha = ui_campo(cartao_login, "Senha", 92, show="*")
+    Button(cartao_login, text="Entrar", bg=UI_AZUL, fg="white", font=(UI_FONTE, 11, "bold"),
+           command=realizar_login).place(x=20, y=186, relwidth=1.0, width=-40, height=42)
+    entry_usuario.focus_set()
     login_window.bind('<Return>', lambda event: realizar_login())  # login pela tecla enter.
 
 
@@ -10419,23 +10924,21 @@ def cadastrar_usuario():
     # Janela de cadastro dos usuários
     janela_cadastro = Toplevel(root)
     janela_cadastro.title("Cadastrar Novo Usuário")
-    janela_cadastro.geometry("300x260")
+    janela_cadastro.geometry("380x420")
     janela_cadastro.resizable(False, False)
-    janela_cadastro['bg'] = '#a4bad2'
+    janela_cadastro['bg'] = UI_FUNDO
 
-    Label(janela_cadastro, text="Novo Usuário:", font=('arial', 10, 'bold'), bg='#a4bad2').place(relx=0.37, rely=0.1)
-    entry_novo_usuario = Entry(janela_cadastro)
-    entry_novo_usuario.place(relx=0.17, rely=0.2, width=200, height=25)
-
-    Label(janela_cadastro, text="Nova Senha:", font=('arial', 10, 'bold'), bg='#a4bad2').place(relx=0.37, rely=0.4)
-    entry_nova_senha = Entry(janela_cadastro, show="*")
-    entry_nova_senha.place(relx=0.17, rely=0.5, width=200, height=25)
+    ui_dialogo(janela_cadastro, "Cadastrar Novo Usuário", "Somente para administradores")
+    cartao_cadastro = ui_cartao(janela_cadastro, 84, 310)
+    entry_novo_usuario = ui_campo(cartao_cadastro, "Novo usuário", 18)
+    entry_nova_senha = ui_campo(cartao_cadastro, "Nova senha", 88, show="*")
 
     var_admin = IntVar()  # 0 (não administrador)
-    Checkbutton(janela_cadastro, bg='#a4bad2', text="Admin", font=('arial', 10, 'bold'),
-                variable=var_admin, onvalue=1, offvalue=0).place(relx=0.15, rely=0.65)
-    Button(janela_cadastro, fg='white', bg='#024593', text="Salvar", font=('arial', 10, 'bold'),
-           command=salvar_usuario).place(relx=0.4, rely=0.83, width=80)
+    Checkbutton(cartao_cadastro, text="Usuário administrador", variable=var_admin, onvalue=1, offvalue=0,
+                font=(UI_FONTE, 10)).place(x=16, y=160)
+    Button(cartao_cadastro, text="Salvar", bg=UI_AZUL, fg="white", font=(UI_FONTE, 11, "bold"),
+           command=salvar_usuario).place(x=20, y=214, relwidth=1.0, width=-40, height=42)
+    entry_novo_usuario.focus_set()
 
 
 def verificar_admin():
@@ -10489,7 +10992,7 @@ LANCAMENTOMenu.add_command(label="Alimentação do SACA por outro Agente", comma
 
 LANCAMENTOMenu.add_separator()
 LANCAMENTOMenu.add_command(label='Sair', command=root.quit)
-meuMenu.add_cascade(label="LANÇAMENTO", menu=LANCAMENTOMenu)
+meuMenu.add_cascade(label="TROCA DE TURNO", menu=LANCAMENTOMenu)
 
 fileRELATORIO = Menu(meuMenu, tearoff=0)
 fileRELATORIO.add_command(label="Gerar Relatório PDF (Completo)", command=gerar_pdf_completo)
