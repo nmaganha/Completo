@@ -9,6 +9,9 @@ from fpdf import FPDF, XPos, YPos
 import os
 import platform
 import shutil #exclusivo para o click24
+import re  # exclusivo para o click24 (validação de e-mails do Agendar)
+import smtplib  # exclusivo para o click24 (envio dos lembretes do Agendar)
+from email.message import EmailMessage  # exclusivo para o click24
 import subprocess
 import random #exclusivo para o click23
 #import webbrowser
@@ -9675,6 +9678,28 @@ LIMITE_PAGINAS_AVISO = 40
 # Usuários autorizados a excluir definitivamente um lançamento já cancelado
 USUARIOS_EXCLUSAO_LANCAMENTO = ["nmaganha", "fjunqueira"]
 
+# Lembretes do botão "Agendar" (envio de e-mail na data/hora programada)
+STATUS_LEMBRETE_PENDENTE = "PENDENTE"
+STATUS_LEMBRETE_ENVIANDO = "ENVIANDO"
+STATUS_LEMBRETE_ENVIADO = "ENVIADO"
+STATUS_LEMBRETE_ERRO = "ERRO"
+STATUS_LEMBRETE_CANCELADO = "CANCELADO"
+QTDE_LINHAS_EMAIL_LEMBRETE = 10
+MAX_TENTATIVAS_LEMBRETE = 5
+INTERVALO_VERIFICACAO_LEMBRETES_MS = 60 * 1000
+# Configuração do servidor de e-mail (criada com valores em branco na primeira execução).
+# A senha também pode ser informada pela variável de ambiente SGA_SMTP_SENHA.
+ARQUIVO_CONFIG_EMAIL_SGA = os.path.join(PASTA_BASE, "sga_email_config.json")
+CONFIG_EMAIL_PADRAO_SGA = {
+    "servidor_smtp": "smtp.office365.com",
+    "porta": 587,
+    "usar_starttls": True,
+    "usar_ssl": False,
+    "usuario": "",
+    "senha": "",
+    "remetente": ""
+}
+
 # Identidade visual do SGA (cores e fonte usadas em todas as janelas do módulo)
 SGA_FONTE = "Segoe UI"
 SGA_AZUL = "#024593"
@@ -9732,6 +9757,19 @@ def garantir_banco_sga():
                         nome_original TEXT NOT NULL,
                         caminho_armazenado TEXT NOT NULL,
                         FOREIGN KEY(lancamento_id) REFERENCES sga_lancamentos(id))''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_lembretes (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        processo_id INTEGER NOT NULL,
+                        data_hora_envio TEXT NOT NULL,
+                        emails TEXT NOT NULL,
+                        criado_por TEXT,
+                        data_criacao TEXT,
+                        status TEXT NOT NULL DEFAULT 'PENDENTE',
+                        tentativas INTEGER NOT NULL DEFAULT 0,
+                        data_envio TEXT,
+                        ultimo_erro TEXT,
+                        FOREIGN KEY(processo_id) REFERENCES sga_processos(id))''')
 
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "status", "TEXT DEFAULT 'ATIVO'")
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "cancelado_por", "TEXT")
@@ -9943,6 +9981,184 @@ def excluir_lancamento(lancamento_id):
     return True
 
 
+# ---------------------------------------------------
+# LEMBRETES AGENDADOS (BOTÃO "AGENDAR" DA JANELA PROCESSO)
+# ---------------------------------------------------
+# Data-hora de envio gravada no formato "AAAA-MM-DD HH:MM", que permite comparar como texto.
+FORMATO_DATA_HORA_LEMBRETE = "%Y-%m-%d %H:%M"
+_REGEX_EMAIL_SGA = re.compile(r"^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$")
+
+
+def email_valido(email):
+    return bool(_REGEX_EMAIL_SGA.match(email or ""))
+
+
+def criar_lembrete(processo_id, data_hora_envio, emails, usuario):
+    """Grava um lembrete vinculado ao processo. 'data_hora_envio' é um datetime e
+    'emails' uma lista de endereços; retorna o id do lembrete."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "INSERT INTO sga_lembretes (processo_id, data_hora_envio, emails, criado_por, data_criacao, status) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (processo_id, data_hora_envio.strftime(FORMATO_DATA_HORA_LEMBRETE), ";".join(emails), usuario,
+         datetime.now().strftime("%d/%m/%Y %H:%M:%S"), STATUS_LEMBRETE_PENDENTE))
+    lembrete_id = cursor.lastrowid
+    conexao.commit()
+    conexao.close()
+    return lembrete_id
+
+
+def listar_lembretes(processo_id):
+    """Retorna os lembretes do processo (exceto os cancelados), do mais próximo ao mais distante."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT id, data_hora_envio, emails, criado_por, status, ultimo_erro FROM sga_lembretes "
+        "WHERE processo_id = ? AND status != ? ORDER BY data_hora_envio ASC",
+        (processo_id, STATUS_LEMBRETE_CANCELADO))
+    linhas = cursor.fetchall()
+    conexao.close()
+    return linhas
+
+
+def cancelar_lembrete(lembrete_id):
+    """Cancela um lembrete ainda não enviado."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_lembretes SET status = ? WHERE id = ? AND status IN (?, ?)",
+                   (STATUS_LEMBRETE_CANCELADO, lembrete_id, STATUS_LEMBRETE_PENDENTE, STATUS_LEMBRETE_ERRO))
+    conexao.commit()
+    conexao.close()
+
+
+def carregar_config_email_sga():
+    """Lê a configuração do servidor SMTP. Se o arquivo não existir, cria um modelo em branco
+    para ser preenchido e retorna None."""
+    if not os.path.exists(ARQUIVO_CONFIG_EMAIL_SGA):
+        try:
+            with open(ARQUIVO_CONFIG_EMAIL_SGA, "w", encoding="utf-8") as arquivo:
+                json.dump(CONFIG_EMAIL_PADRAO_SGA, arquivo, indent=4, ensure_ascii=False)
+        except OSError:
+            pass
+        return None
+    with open(ARQUIVO_CONFIG_EMAIL_SGA, "r", encoding="utf-8") as arquivo:
+        config = dict(CONFIG_EMAIL_PADRAO_SGA, **json.load(arquivo))
+    config["senha"] = os.environ.get("SGA_SMTP_SENHA", config.get("senha", ""))
+    if not config.get("servidor_smtp") or not (config.get("remetente") or config.get("usuario")):
+        return None
+    return config
+
+
+def enviar_email_lembrete(config, destinatarios, titulo_processo):
+    """Envia o e-mail de lembrete do processo aos destinatários informados."""
+    mensagem = EmailMessage()
+    mensagem["Subject"] = f"SGA - Lembrete: {titulo_processo}"
+    mensagem["From"] = config.get("remetente") or config.get("usuario")
+    mensagem["To"] = ", ".join(destinatarios)
+    mensagem.set_content(f"O processo {titulo_processo} necessita de sua atenção.\n"
+                         f"Favor acessar o SGA – Sistema de Gestão de Atividades.")
+
+    porta = int(config.get("porta") or 587)
+    if config.get("usar_ssl"):
+        servidor = smtplib.SMTP_SSL(config["servidor_smtp"], porta, timeout=30)
+    else:
+        servidor = smtplib.SMTP(config["servidor_smtp"], porta, timeout=30)
+    try:
+        if not config.get("usar_ssl") and config.get("usar_starttls", True):
+            servidor.starttls()
+        if config.get("usuario") and config.get("senha"):
+            servidor.login(config["usuario"], config["senha"])
+        servidor.send_message(mensagem)
+    finally:
+        servidor.quit()
+
+
+def processar_lembretes_vencidos():
+    """Envia os lembretes cuja data/hora já chegou. Cada lembrete é 'reservado' (status
+    ENVIANDO) antes do envio, para não ser enviado em duplicidade. Em caso de falha ele volta
+    para PENDENTE e é tentado de novo na próxima verificação, até MAX_TENTATIVAS_LEMBRETE."""
+    agora = datetime.now().strftime(FORMATO_DATA_HORA_LEMBRETE)
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT l.id, l.emails, l.tentativas, p.titulo FROM sga_lembretes l "
+        "JOIN sga_processos p ON p.id = l.processo_id "
+        "WHERE l.status = ? AND l.data_hora_envio <= ? ORDER BY l.data_hora_envio ASC",
+        (STATUS_LEMBRETE_PENDENTE, agora))
+    vencidos = cursor.fetchall()
+    if not vencidos:
+        conexao.close()
+        return
+
+    try:
+        config = carregar_config_email_sga()
+        erro_config = None if config else \
+            f"Servidor de e-mail não configurado ({os.path.basename(ARQUIVO_CONFIG_EMAIL_SGA)})."
+    except (OSError, ValueError) as erro:
+        config, erro_config = None, f"Configuração de e-mail inválida: {erro}"
+
+    for lembrete_id, emails, tentativas, titulo in vencidos:
+        cursor.execute("UPDATE sga_lembretes SET status = ? WHERE id = ? AND status = ?",
+                       (STATUS_LEMBRETE_ENVIANDO, lembrete_id, STATUS_LEMBRETE_PENDENTE))
+        conexao.commit()
+        if cursor.rowcount == 0:
+            continue  # cancelado ou já assumido por outra instância do aplicativo
+
+        erro = erro_config
+        if config:
+            try:
+                enviar_email_lembrete(config, [e for e in emails.split(";") if e], titulo)
+            except (smtplib.SMTPException, OSError) as falha:
+                erro = str(falha) or falha.__class__.__name__
+
+        if erro is None:
+            cursor.execute("UPDATE sga_lembretes SET status = ?, data_envio = ?, ultimo_erro = NULL WHERE id = ?",
+                           (STATUS_LEMBRETE_ENVIADO, datetime.now().strftime("%d/%m/%Y %H:%M:%S"), lembrete_id))
+        else:
+            tentativas += 1
+            novo_status = STATUS_LEMBRETE_ERRO if tentativas >= MAX_TENTATIVAS_LEMBRETE else STATUS_LEMBRETE_PENDENTE
+            cursor.execute("UPDATE sga_lembretes SET status = ?, tentativas = ?, ultimo_erro = ? WHERE id = ?",
+                           (novo_status, tentativas, erro, lembrete_id))
+        conexao.commit()
+    conexao.close()
+
+
+_verificador_lembretes_sga = {"ocupado": False}
+
+
+def iniciar_verificador_lembretes_sga():
+    """Verifica, a cada minuto e enquanto o aplicativo estiver aberto, se há lembretes do SGA
+    a enviar. O envio roda em segundo plano para não travar as janelas. Lembretes cuja
+    data/hora passou com o aplicativo fechado são enviados na próxima abertura."""
+    try:
+        garantir_banco_sga()
+        # Lembretes que ficaram 'ENVIANDO' (aplicativo fechado durante o envio) voltam à fila
+        conexao = sqlite3.connect(BANCO_SGA)
+        conexao.execute("UPDATE sga_lembretes SET status = ? WHERE status = ?",
+                        (STATUS_LEMBRETE_PENDENTE, STATUS_LEMBRETE_ENVIANDO))
+        conexao.commit()
+        conexao.close()
+    except sqlite3.Error:
+        pass
+
+    def executar_em_segundo_plano():
+        try:
+            processar_lembretes_vencidos()
+        except Exception:
+            pass  # uma falha pontual não pode interromper as próximas verificações
+        finally:
+            _verificador_lembretes_sga["ocupado"] = False
+
+    def verificar():
+        if not _verificador_lembretes_sga["ocupado"]:
+            _verificador_lembretes_sga["ocupado"] = True
+            threading.Thread(target=executar_em_segundo_plano, daemon=True).start()
+        root.after(INTERVALO_VERIFICACAO_LEMBRETES_MS, verificar)
+
+    root.after(5000, verificar)
+
+
 def gerar_pdf_processo(titulo, localidade, lancamentos, status, cancelado_por):
     """Gera o PDF completo do processo (título, localidade, todos os lançamentos com
     data/hora, descrição e relação de documentos anexados) e abre o arquivo gerado."""
@@ -10046,6 +10262,7 @@ SGA_ESTILOS_BOTAO = {
     "perigo": ("#C62828", "#A11F1F", "white"),
     "aviso": ("#CC8400", "#A86D00", "white"),
     "neutro": ("#E3E8EF", "#D0D7E2", SGA_TEXTO),
+    "agendar": ("#5E35B1", "#4A2A8C", "white"),
 }
 
 
@@ -10354,10 +10571,198 @@ def tela_atualizar_novo_lancamento(parent, processo_id, callback_atualizar):
           font=(SGA_FONTE, 10, "italic")).place(relx=1.0, x=-24, rely=0.5, anchor="e")
 
 
+def tela_agendar_lembrete(parent, processo_id, titulo_processo):
+    """Janela 'Agendar Lembrete': data, horário e até QTDE_LINHAS_EMAIL_LEMBRETE e-mails que
+    receberão, na data/hora programada, o aviso de que o processo necessita de atenção.
+    Também lista os lembretes já agendados para o processo, permitindo cancelá-los."""
+    garantir_banco_sga()
+
+    janela = Toplevel(parent)
+    janela.title("Agendar Lembrete")
+    janela.geometry('680x750')
+    janela.minsize(680, 750)
+    janela.resizable(False, True)
+    janela['bg'] = SGA_FUNDO
+    janela.transient(parent)
+
+    criar_cabecalho_sga(janela, 'Agendar Lembrete', altura=52)
+
+    card = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    card.place(x=20, y=68, relwidth=1.0, width=-40, relheight=1.0, height=-160)
+
+    def rotulo(texto, x, y):
+        Label(card, text=texto, bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "bold")).place(x=x, y=y)
+
+    Label(card, text=f"Processo: {titulo_processo}", bg=SGA_CARD, fg=SGA_TEXTO,
+          font=(SGA_FONTE, 10, "bold"), wraplength=590, justify="left", anchor="w"
+          ).place(x=16, y=10, relwidth=1.0, width=-32)
+
+    # Data e horário do envio (padrão: próxima hora cheia)
+    sugestao = (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+    rotulo("Data do envio", 16, 48)
+    entry_data = criar_entrada_sga(card)
+    entry_data.place(x=16, y=72, width=120, height=30)
+    entry_data.insert(0, sugestao.strftime("%d/%m/%Y"))
+
+    def selecionar_data():
+        def salvar_data():
+            entry_data.delete(0, END)
+            entry_data.insert(0, cal.selection_get().strftime('%d/%m/%Y'))
+            janela_cal.destroy()
+
+        janela_cal = Toplevel(janela)
+        janela_cal.title("Selecione a Data")
+        janela_cal.transient(janela)
+        cal = Calendar(janela_cal, selectmode='day', date_pattern='dd-mm-yyyy', mindate=datetime.now().date())
+        cal.pack(pady=20)
+        Button(janela_cal, text="Salvar", command=salvar_data).pack(pady=10)
+        janela_cal.grab_set()
+
+    criar_botao_sga(card, "Selecionar", selecionar_data, "neutro", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(x=142, y=72, width=100, height=30)
+
+    rotulo("Horário do envio", 280, 48)
+    combo_hora = ttk.Combobox(card, values=[f"{h:02d}" for h in range(24)], state="readonly",
+                              font=(SGA_FONTE, 10))
+    combo_hora.place(x=280, y=72, width=60, height=30)
+    combo_hora.set(sugestao.strftime("%H"))
+    Label(card, text=":", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 11, "bold")).place(x=344, y=74)
+    combo_minuto = ttk.Combobox(card, values=[f"{m:02d}" for m in range(60)], state="readonly",
+                                font=(SGA_FONTE, 10))
+    combo_minuto.place(x=356, y=72, width=60, height=30)
+    combo_minuto.set(sugestao.strftime("%M"))
+    Label(card, text="h", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 10)).place(x=420, y=76)
+
+    # E-mails dos profissionais que receberão o lembrete
+    rotulo("E-mails dos profissionais que receberão o lembrete", 16, 116)
+    entradas_email = []
+    for indice in range(QTDE_LINHAS_EMAIL_LEMBRETE):
+        y = 140 + indice * 32
+        Label(card, text=f"{indice + 1:02d}", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
+              font=(SGA_FONTE, 9)).place(x=16, y=y + 6)
+        entrada = criar_entrada_sga(card)
+        entrada.place(x=44, y=y, relwidth=1.0, width=-60, height=28)
+        entradas_email.append(entrada)
+    entradas_email[0].focus_set()
+
+    # Lembretes já agendados para este processo
+    y_lista = 140 + QTDE_LINHAS_EMAIL_LEMBRETE * 32 + 8
+    rotulo("Lembretes agendados para este processo", 16, y_lista)
+    frame_lista = Frame(card, bg=SGA_CARD)
+    frame_lista.place(x=16, y=y_lista + 24, relwidth=1.0, width=-150, relheight=1.0, height=-(y_lista + 36))
+    scroll_lista = Scrollbar(frame_lista)
+    scroll_lista.pack(side=RIGHT, fill=Y)
+    lista_lembretes = Listbox(frame_lista, font=(SGA_FONTE, 9), relief="flat", bd=0, highlightthickness=1,
+                              highlightbackground=SGA_BORDA, activestyle="none",
+                              yscrollcommand=scroll_lista.set)
+    lista_lembretes.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll_lista.config(command=lista_lembretes.yview)
+    ids_lembretes = []
+
+    def montar_lista():
+        lista_lembretes.delete(0, END)
+        ids_lembretes.clear()
+        for lembrete_id, data_hora_envio, emails, criado_por, status, ultimo_erro in listar_lembretes(processo_id):
+            try:
+                quando = datetime.strptime(data_hora_envio, FORMATO_DATA_HORA_LEMBRETE).strftime("%d/%m/%Y - %H:%Mh")
+            except ValueError:
+                quando = data_hora_envio
+            qtde = len([e for e in emails.split(";") if e])
+            texto = f"{quando}  |  {status}  |  {qtde} destinatário(s)  |  por {criado_por or '-'}"
+            if status == STATUS_LEMBRETE_ERRO and ultimo_erro:
+                texto += f"  |  {ultimo_erro}"
+            lista_lembretes.insert(END, texto)
+            ids_lembretes.append((lembrete_id, status, emails))
+
+    def ao_selecionar(event=None):
+        selecao = lista_lembretes.curselection()
+        if selecao:
+            _, _, emails = ids_lembretes[selecao[0]]
+            status_lista.config(text=emails.replace(";", "; "))
+
+    lista_lembretes.bind("<<ListboxSelect>>", ao_selecionar)
+
+    def cancelar_selecionado():
+        selecao = lista_lembretes.curselection()
+        if not selecao:
+            messagebox.showwarning("Atenção", "Selecione um lembrete na lista.", parent=janela)
+            return
+        lembrete_id, status, _ = ids_lembretes[selecao[0]]
+        if status not in (STATUS_LEMBRETE_PENDENTE, STATUS_LEMBRETE_ERRO):
+            messagebox.showinfo("Atenção", f"Este lembrete já está com status {status}.", parent=janela)
+            return
+        if messagebox.askyesno("Cancelar Lembrete", "Deseja cancelar o lembrete selecionado?", parent=janela):
+            cancelar_lembrete(lembrete_id)
+            status_lista.config(text="")
+            montar_lista()
+
+    criar_botao_sga(card, "Cancelar\nlembrete", cancelar_selecionado, "perigo", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(relx=1.0, x=-16, y=y_lista + 24, anchor="ne", width=100, height=44)
+
+    status_lista = Label(janela, text="", bg=SGA_FUNDO, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 8),
+                         anchor="w", justify="left", wraplength=630)
+    status_lista.place(x=20, rely=1.0, y=-66, anchor="sw", relwidth=1.0, width=-40)
+
+    montar_lista()
+
+    def salvar():
+        try:
+            data = datetime.strptime(entry_data.get().strip(), "%d/%m/%Y")
+        except ValueError:
+            messagebox.showwarning("Atenção", "Informe a data no formato DD/MM/AAAA.", parent=janela)
+            return
+        data_hora_envio = data.replace(hour=int(combo_hora.get()), minute=int(combo_minuto.get()))
+        if data_hora_envio <= datetime.now():
+            messagebox.showwarning("Atenção", "A data e o horário do envio devem ser posteriores ao momento atual.",
+                                   parent=janela)
+            return
+
+        emails = []
+        for posicao, entrada in enumerate(entradas_email, start=1):
+            email = entrada.get().strip()
+            if not email:
+                continue
+            if not email_valido(email):
+                messagebox.showwarning("Atenção", f"O e-mail da linha {posicao:02d} é inválido:\n{email}",
+                                       parent=janela)
+                entrada.focus_set()
+                return
+            if email.lower() not in [e.lower() for e in emails]:
+                emails.append(email)
+        if not emails:
+            messagebox.showwarning("Atenção", "Informe ao menos um e-mail.", parent=janela)
+            return
+
+        criar_lembrete(processo_id, data_hora_envio, emails, obter_nome_usuario_logado())
+        aviso = (f"Lembrete agendado para {data_hora_envio.strftime('%d/%m/%Y - %H:%Mh')} "
+                 f"({len(emails)} destinatário(s)).")
+        try:
+            configurado = carregar_config_email_sga() is not None
+        except (OSError, ValueError):
+            configurado = False
+        if not configurado:
+            aviso += (f"\n\nAtenção: o servidor de e-mail ainda não está configurado. Preencha o arquivo "
+                      f"'{os.path.basename(ARQUIVO_CONFIG_EMAIL_SGA)}' na pasta do sistema para que o "
+                      f"lembrete possa ser enviado.")
+        aviso += "\n\nO envio ocorre enquanto o sistema estiver aberto neste computador."
+        messagebox.showinfo("Sucesso", aviso, parent=janela)
+        for entrada in entradas_email:
+            entrada.delete(0, END)
+        montar_lista()
+
+    criar_botao_sga(janela, "Salvar", salvar, "primario"
+                    ).place(relx=0.5, x=-130, rely=1.0, y=-24, anchor="sw", width=120, height=38)
+    criar_botao_sga(janela, "Voltar", janela.destroy, "neutro"
+                    ).place(relx=0.5, x=10, rely=1.0, y=-24, anchor="sw", width=120, height=38)
+
+    janela.grab_set()
+
+
 def tela_ver_processo(parent, processo_id, callback_atualizar):
     """Janela 'Processo - {Título}': histórico completo, em ordem CRONOLÓGICA, com
     documentos anexados, cancelamento individual de cada lançamento, e os botões
-    IMPRIMIR / VOLTAR / CONCLUIR. (O cancelamento do processo inteiro é feito pelo
+    IMPRIMIR / VOLTAR / CONCLUIR / AGENDAR. (O cancelamento do processo inteiro é feito pelo
     botão 'C' na tela do índice, não mais aqui.)"""
     processo = buscar_processo(processo_id)
     if not processo:
@@ -10561,13 +10966,18 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
         janela.destroy()
         callback_atualizar()
 
+    def agendar():
+        tela_agendar_lembrete(janela, processo_id, titulo)
+
     rodape = criar_rodape_sga(janela)
     criar_botao_sga(rodape, "IMPRIMIR", imprimir, "primario"
-                    ).place(relx=0.5, x=-240, rely=0.5, anchor="w", width=140, height=40)
+                    ).place(relx=0.5, x=-325, rely=0.5, anchor="w", width=140, height=40)
     criar_botao_sga(rodape, "VOLTAR", voltar, "aviso"
-                    ).place(relx=0.5, x=-70, rely=0.5, anchor="w", width=140, height=40)
+                    ).place(relx=0.5, x=-155, rely=0.5, anchor="w", width=140, height=40)
     criar_botao_sga(rodape, "CONCLUIR", concluir, "sucesso"
-                    ).place(relx=0.5, x=100, rely=0.5, anchor="w", width=140, height=40)
+                    ).place(relx=0.5, x=15, rely=0.5, anchor="w", width=140, height=40)
+    criar_botao_sga(rodape, "AGENDAR", agendar, "agendar"
+                    ).place(relx=0.5, x=185, rely=0.5, anchor="w", width=140, height=40)
 
 
 def cmd_click24():
@@ -11058,6 +11468,7 @@ fileSGA.add_command(label="Sistema de Gestão de Atividades", command=cmd_click2
 fileSGA.add_separator()
 fileSGA.add_command(label='Sair', command=root.quit)
 meuMenu.add_cascade(label="SGA", menu=fileSGA)
+iniciar_verificador_lembretes_sga()  # envio automático dos lembretes do botão "Agendar"
 # ========cascate SEGUNDA PARTE termina aqui
 
 ADMINMenu = Menu(meuMenu, tearoff=0)
