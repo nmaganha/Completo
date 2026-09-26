@@ -9664,6 +9664,8 @@ STATUS_ABERTO = "ABERTO"
 STATUS_CANCELADO = "CANCELADO"
 STATUS_REABERTO = "REABERTO"
 STATUS_CONCLUIDO = "CONCLUÍDO"
+# Processos cancelados ou concluídos não aceitam alterações até serem reabertos
+STATUS_FINALIZADOS = (STATUS_CANCELADO, STATUS_CONCLUIDO)
 
 STATUS_LANCAMENTO_ATIVO = "ATIVO"
 STATUS_LANCAMENTO_CANCELADO = "CANCELADO"
@@ -10771,6 +10773,21 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
     inner_historico = criar_area_rolavel(historico_frame, bg=SGA_FUNDO)
 
     estado = {"lancamentos": [], "status_processo": status_processo, "cancelado_por": cancelado_por}
+    processo_finalizado = status_processo in STATUS_FINALIZADOS
+
+    def avisar_se_finalizado():
+        """Confere o status atual no banco (a janela pode estar aberta há algum tempo).
+        Retorna True, após avisar o usuário, se o processo estiver cancelado ou concluído."""
+        atual = buscar_processo(processo_id)
+        status_atual = atual[3] if atual else None
+        if status_atual in STATUS_FINALIZADOS:
+            messagebox.showwarning(
+                "Processo " + status_atual,
+                f"O processo está {status_atual} e não permite alterações.\n\n"
+                f"Para alterá-lo, reabra-o primeiro pelo botão 'A' (Atualizar) do índice.",
+                parent=janela)
+            return True
+        return False
 
     # As descrições acompanham a largura da janela: quando ela é maximizada, o texto
     # passa a quebrar linha mais à direita (a partir do valor original de 880).
@@ -10806,7 +10823,7 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             "Os documentos anexados a ele ficarão inacessíveis (serão removidos do banco "
             "de dados). O texto do lançamento permanece no histórico, tachado.",
             parent=janela)
-        if confirmar:
+        if confirmar and not avisar_se_finalizado():
             cancelar_lancamento(lancamento_id, obter_nome_usuario_logado())
             montar_historico()
 
@@ -10821,7 +10838,7 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             "Deseja excluir DEFINITIVAMENTE este lançamento cancelado?\n\n"
             "Ele será removido do histórico do processo e essa ação não poderá ser desfeita.",
             parent=janela)
-        if confirmar:
+        if confirmar and not avisar_se_finalizado():
             excluir_lancamento(lancamento_id)
             montar_historico()
 
@@ -10864,8 +10881,8 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             if not cancelado:
                 lancamento_conclusao = str(lanc["descricao"] or "").startswith(PREFIXO_DESCRICAO_CONCLUSAO)
 
-            if lancamento_conclusao:
-                pass  # lançamento da conclusão do processo: sem botões "Cancelar" e "Excluir"
+            if lancamento_conclusao or processo_finalizado:
+                pass  # conclusão do processo, ou processo cancelado/concluído: sem "Cancelar" e "Excluir"
             elif not cancelado:
                 criar_botao_sga(topo, "Cancelar", lambda lid=lanc["id"]: cancelar_este_lancamento(lid),
                                 "neutro", fonte=(SGA_FONTE, 8), padx=8, pady=1
@@ -10918,6 +10935,8 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
                             estado["status_processo"], estado["cancelado_por"])
 
     def concluir():
+        if avisar_se_finalizado():
+            return
         confirmar = messagebox.askyesno(
             "Confirmar Conclusão",
             f"Deseja concluir o processo '{titulo}'?",
@@ -10938,15 +10957,19 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
     def agendar():
         tela_agendar_lembrete(janela, processo_id, titulo)
 
+    # Processo cancelado ou concluído não exibe o CONCLUIR (só volta após ser reaberto)
+    botoes_rodape = [("IMPRIMIR", imprimir, "primario"), ("VOLTAR", voltar, "aviso")]
+    if not processo_finalizado:
+        botoes_rodape.append(("CONCLUIR", concluir, "sucesso"))
+    botoes_rodape.append(("AGENDAR", agendar, "agendar"))
+
     rodape = criar_rodape_sga(janela)
-    criar_botao_sga(rodape, "IMPRIMIR", imprimir, "primario"
-                    ).place(relx=0.5, x=-325, rely=0.5, anchor="w", width=140, height=40)
-    criar_botao_sga(rodape, "VOLTAR", voltar, "aviso"
-                    ).place(relx=0.5, x=-155, rely=0.5, anchor="w", width=140, height=40)
-    criar_botao_sga(rodape, "CONCLUIR", concluir, "sucesso"
-                    ).place(relx=0.5, x=15, rely=0.5, anchor="w", width=140, height=40)
-    criar_botao_sga(rodape, "AGENDAR", agendar, "agendar"
-                    ).place(relx=0.5, x=185, rely=0.5, anchor="w", width=140, height=40)
+    largura_botao, espaco_botoes = 140, 30
+    x_inicial = -(len(botoes_rodape) * largura_botao + (len(botoes_rodape) - 1) * espaco_botoes) // 2
+    for posicao, (texto_botao, comando_botao, estilo_botao) in enumerate(botoes_rodape):
+        criar_botao_sga(rodape, texto_botao, comando_botao, estilo_botao
+                        ).place(relx=0.5, x=x_inicial + posicao * (largura_botao + espaco_botoes),
+                                rely=0.5, anchor="w", width=largura_botao, height=40)
 
 
 def cmd_click24():
@@ -11063,7 +11086,7 @@ def cmd_click24():
                   anchor="w", justify="left", wraplength=780
                   ).pack(side=LEFT, fill=X, expand=True, padx=(14, 0), pady=9)
 
-            if status != STATUS_CANCELADO:
+            if status not in STATUS_FINALIZADOS:  # cancelado ou concluído: sem o botão "C"
                 btn_c = criar_botao_sga(linha, "C", lambda pid=processo_id, tit=titulo: cancelar_este_processo(pid, tit),
                                         "perigo", fonte=(SGA_FONTE, 9, "bold"), width=3, pady=2)
                 btn_c.pack(side=LEFT, padx=3, pady=6)
@@ -11082,6 +11105,15 @@ def cmd_click24():
             Frame(inner_indice, bg="#E5EAF1", height=1).pack(fill=X)
 
     def cancelar_este_processo(processo_id, titulo_processo):
+        processo = buscar_processo(processo_id)
+        if processo and processo[3] in STATUS_FINALIZADOS:
+            messagebox.showwarning(
+                "Processo " + processo[3],
+                f"O processo '{titulo_processo}' está {processo[3]} e não pode ser cancelado.\n\n"
+                f"Para alterá-lo, reabra-o primeiro pelo botão 'A' (Atualizar).",
+                parent=indice_win)
+            montar_indice()
+            return
         confirmar = messagebox.askyesno(
             "Confirmar Cancelamento",
             f"Deseja realmente cancelar o processo '{titulo_processo}'?\n\n"
