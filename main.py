@@ -1,4 +1,4 @@
-# Código atualizado em 21-09-26 – deixar verde a barra da esquerda quando concluído)
+# Código atualizado em 26-09-26 – 1027 - (Alterado processo concluido e cancelado)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -9664,6 +9664,8 @@ STATUS_ABERTO = "ABERTO"
 STATUS_CANCELADO = "CANCELADO"
 STATUS_REABERTO = "REABERTO"
 STATUS_CONCLUIDO = "CONCLUÍDO"
+# Processos cancelados ou concluídos não aceitam alterações até serem reabertos
+STATUS_FINALIZADOS = (STATUS_CANCELADO, STATUS_CONCLUIDO)
 
 STATUS_LANCAMENTO_ATIVO = "ATIVO"
 STATUS_LANCAMENTO_CANCELADO = "CANCELADO"
@@ -9674,6 +9676,11 @@ PREFIXO_DESCRICAO_CONCLUSAO = "Processo concluído pelo usuário:"
 LIMITE_PAGINAS_AVISO = 40
 # Usuários autorizados a excluir definitivamente um lançamento já cancelado
 USUARIOS_EXCLUSAO_LANCAMENTO = ["nmaganha", "fjunqueira"]
+
+# Lembretes do botão "Agendar": exibidos no login dos usuários escolhidos, após a data/hora programada
+STATUS_LEMBRETE_ATIVO = "ATIVO"
+STATUS_LEMBRETE_CANCELADO = "CANCELADO"
+QTDE_LINHAS_USUARIO_LEMBRETE = 10
 
 # Identidade visual do SGA (cores e fonte usadas em todas as janelas do módulo)
 SGA_FONTE = "Segoe UI"
@@ -9732,6 +9739,24 @@ def garantir_banco_sga():
                         nome_original TEXT NOT NULL,
                         caminho_armazenado TEXT NOT NULL,
                         FOREIGN KEY(lancamento_id) REFERENCES sga_lancamentos(id))''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_agendamentos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        processo_id INTEGER NOT NULL,
+                        data_hora_exibicao TEXT NOT NULL,
+                        mensagem TEXT,
+                        criado_por TEXT,
+                        data_criacao TEXT,
+                        status TEXT NOT NULL DEFAULT 'ATIVO',
+                        FOREIGN KEY(processo_id) REFERENCES sga_processos(id))''')
+
+    # Um registro por usuário lembrado; data_ciencia preenchida quando ele clica em "Ciente"
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_agendamentos_usuarios (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        lembrete_id INTEGER NOT NULL,
+                        usuario TEXT NOT NULL,
+                        data_ciencia TEXT,
+                        FOREIGN KEY(lembrete_id) REFERENCES sga_agendamentos(id))''')
 
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "status", "TEXT DEFAULT 'ATIVO'")
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "cancelado_por", "TEXT")
@@ -10046,6 +10071,7 @@ SGA_ESTILOS_BOTAO = {
     "perigo": ("#C62828", "#A11F1F", "white"),
     "aviso": ("#CC8400", "#A86D00", "white"),
     "neutro": ("#E3E8EF", "#D0D7E2", SGA_TEXTO),
+    "agendar": ("#5E35B1", "#4A2A8C", "white"),
 }
 
 
@@ -10354,10 +10380,360 @@ def tela_atualizar_novo_lancamento(parent, processo_id, callback_atualizar):
           font=(SGA_FONTE, 10, "italic")).place(relx=1.0, x=-24, rely=0.5, anchor="e")
 
 
+# ---------------------------------------------------
+# LEMBRETES AGENDADOS (BOTÃO "AGENDAR" DA JANELA PROCESSO)
+# ---------------------------------------------------
+# Data-hora de exibição gravada no formato "AAAA-MM-DD HH:MM", que permite comparar como texto.
+FORMATO_DATA_HORA_LEMBRETE = "%Y-%m-%d %H:%M"
+
+
+def listar_usuarios_sistema():
+    """Retorna os nomes de usuário cadastrados no sistema (tabela de login), em ordem alfabética."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("SELECT usuario FROM Usuarios ORDER BY LOWER(usuario) ASC")
+    usuarios = [linha[0] for linha in cursor.fetchall()]
+    conexao.close()
+    return usuarios
+
+
+def criar_lembrete(processo_id, data_hora_exibicao, usuarios, mensagem, criado_por):
+    """Grava um lembrete vinculado ao processo e os usuários que deverão recebê-lo.
+    'data_hora_exibicao' é um datetime; retorna o id do lembrete."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "INSERT INTO sga_agendamentos (processo_id, data_hora_exibicao, mensagem, criado_por, data_criacao, status) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (processo_id, data_hora_exibicao.strftime(FORMATO_DATA_HORA_LEMBRETE), mensagem, criado_por,
+         datetime.now().strftime("%d/%m/%Y %H:%M:%S"), STATUS_LEMBRETE_ATIVO))
+    lembrete_id = cursor.lastrowid
+    cursor.executemany("INSERT INTO sga_agendamentos_usuarios (lembrete_id, usuario) VALUES (?, ?)",
+                       [(lembrete_id, usuario) for usuario in usuarios])
+    conexao.commit()
+    conexao.close()
+    return lembrete_id
+
+
+def listar_lembretes(processo_id):
+    """Retorna os lembretes ativos do processo, do mais próximo ao mais distante, cada um com
+    a lista de (usuário, data_ciencia) dos destinatários."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT id, data_hora_exibicao, mensagem, criado_por FROM sga_agendamentos "
+        "WHERE processo_id = ? AND status = ? ORDER BY data_hora_exibicao ASC",
+        (processo_id, STATUS_LEMBRETE_ATIVO))
+    resultado = []
+    for lembrete_id, data_hora_exibicao, mensagem, criado_por in cursor.fetchall():
+        cursor.execute("SELECT usuario, data_ciencia FROM sga_agendamentos_usuarios WHERE lembrete_id = ? "
+                       "ORDER BY id ASC", (lembrete_id,))
+        resultado.append({"id": lembrete_id, "data_hora_exibicao": data_hora_exibicao, "mensagem": mensagem,
+                          "criado_por": criado_por, "usuarios": cursor.fetchall()})
+    conexao.close()
+    return resultado
+
+
+def cancelar_lembrete(lembrete_id):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_agendamentos SET status = ? WHERE id = ?", (STATUS_LEMBRETE_CANCELADO, lembrete_id))
+    conexao.commit()
+    conexao.close()
+
+
+def listar_lembretes_pendentes_usuario(usuario):
+    """Lembretes ativos, com data/hora já alcançada, destinados ao usuário e dos quais ele
+    ainda não deu ciência."""
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute(
+        "SELECT lu.id, p.titulo, l.mensagem, l.criado_por, l.data_hora_exibicao "
+        "FROM sga_agendamentos_usuarios lu "
+        "JOIN sga_agendamentos l ON l.id = lu.lembrete_id "
+        "JOIN sga_processos p ON p.id = l.processo_id "
+        "WHERE LOWER(lu.usuario) = ? AND lu.data_ciencia IS NULL AND l.status = ? "
+        "AND l.data_hora_exibicao <= ? ORDER BY l.data_hora_exibicao ASC",
+        (usuario.strip().lower(), STATUS_LEMBRETE_ATIVO, datetime.now().strftime(FORMATO_DATA_HORA_LEMBRETE)))
+    linhas = cursor.fetchall()
+    conexao.close()
+    return linhas
+
+
+def registrar_ciencia_lembrete(lembrete_usuario_id):
+    conexao = sqlite3.connect(BANCO_SGA)
+    cursor = conexao.cursor()
+    cursor.execute("UPDATE sga_agendamentos_usuarios SET data_ciencia = ? WHERE id = ?",
+                   (datetime.now().strftime("%d/%m/%Y %H:%M:%S"), lembrete_usuario_id))
+    conexao.commit()
+    conexao.close()
+
+
+def _formatar_data_hora_lembrete(texto):
+    try:
+        return datetime.strptime(texto, FORMATO_DATA_HORA_LEMBRETE).strftime("%d/%m/%Y - %H:%Mh")
+    except (TypeError, ValueError):
+        return texto or ""
+
+
+def janela_lembrete_sga(titulo_processo, mensagem, criado_por, data_hora_exibicao):
+    """Janela 'Lembrete do SGA' exibida no login. Retorna True se o usuário clicar em 'Ciente'
+    (o lembrete não aparece mais para ele) ou False em 'Lembrar depois' / fechar a janela
+    (o lembrete volta a aparecer no próximo login)."""
+    resultado = {"ciente": False}
+
+    janela = Toplevel(root)
+    janela.title("Lembrete do SGA")
+    janela.geometry('600x440')
+    janela.resizable(False, False)
+    janela['bg'] = SGA_FUNDO
+    janela.attributes('-topmost', True)
+
+    criar_cabecalho_sga(janela, 'Lembrete do SGA', altura=52)
+
+    card = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    card.place(x=20, y=68, relwidth=1.0, width=-40, height=290)
+
+    Label(card, text=f"O processo {titulo_processo} necessita de sua atenção.", bg=SGA_CARD, fg=SGA_AZUL,
+          font=(SGA_FONTE, 12, "bold"), wraplength=520, justify="left", anchor="w"
+          ).place(x=16, y=12, relwidth=1.0, width=-32)
+
+    Label(card, text="Mensagem:", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "bold")).place(x=16, y=68)
+
+    frame_texto = Frame(card, bg=SGA_CARD)
+    frame_texto.place(x=16, y=90, relwidth=1.0, width=-32, height=120)
+    scroll = Scrollbar(frame_texto)
+    scroll.pack(side=RIGHT, fill=Y)
+    texto = criar_area_texto_sga(frame_texto, wrap=WORD, yscrollcommand=scroll.set)
+    texto.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll.config(command=texto.yview)
+    texto.insert("1.0", mensagem or "")
+    texto.config(state=DISABLED)
+
+    Label(card, text="Favor acessar o SGA – Sistema de Gestão de Atividades para verificar.", bg=SGA_CARD,
+          fg=SGA_TEXTO, font=(SGA_FONTE, 10), anchor="w").place(x=16, y=222)
+    Label(card, text=f"Agendado por {criado_por or '-'} para {_formatar_data_hora_lembrete(data_hora_exibicao)}",
+          bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "italic"), anchor="w").place(x=16, y=252)
+
+    def ciente():
+        resultado["ciente"] = True
+        janela.destroy()
+
+    criar_botao_sga(janela, "Ciente", ciente, "sucesso"
+                    ).place(relx=0.5, x=-160, y=378, width=150, height=38)
+    criar_botao_sga(janela, "Lembrar depois", janela.destroy, "neutro"
+                    ).place(relx=0.5, x=10, y=378, width=150, height=38)
+
+    janela.grab_set()
+    janela.focus_force()
+    janela.wait_window()
+    return resultado["ciente"]
+
+
+def exibir_lembretes_sga_do_usuario(usuario):
+    """Chamado logo após o login: mostra, um de cada vez, os lembretes do SGA já vencidos
+    destinados ao usuário que acabou de entrar no sistema."""
+    try:
+        garantir_banco_sga()
+        pendentes = listar_lembretes_pendentes_usuario(usuario)
+    except sqlite3.Error:
+        return
+    for lembrete_usuario_id, titulo, mensagem, criado_por, data_hora_exibicao in pendentes:
+        if janela_lembrete_sga(titulo, mensagem, criado_por, data_hora_exibicao):
+            registrar_ciencia_lembrete(lembrete_usuario_id)
+
+
+def tela_agendar_lembrete(parent, processo_id, titulo_processo):
+    """Janela 'Agendar Lembrete': data, horário, até QTDE_LINHAS_USUARIO_LEMBRETE usuários e a
+    mensagem que eles verão ao entrar no sistema a partir da data/hora programada. Também lista
+    os lembretes já agendados para o processo, permitindo cancelá-los."""
+    garantir_banco_sga()
+
+    janela = Toplevel(parent)
+    janela.title("Agendar Lembrete")
+    janela.geometry('760x740')
+    janela.minsize(760, 740)
+    janela.resizable(False, True)
+    janela['bg'] = SGA_FUNDO
+    janela.transient(parent)
+
+    criar_cabecalho_sga(janela, 'Agendar Lembrete', altura=52)
+
+    card = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+    card.place(x=20, y=68, relwidth=1.0, width=-40, relheight=1.0, height=-160)
+
+    def rotulo(texto, x, y):
+        Label(card, text=texto, bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "bold")).place(x=x, y=y)
+
+    Label(card, text=f"Processo: {titulo_processo}", bg=SGA_CARD, fg=SGA_TEXTO,
+          font=(SGA_FONTE, 10, "bold"), wraplength=680, justify="left", anchor="w"
+          ).place(x=16, y=10, relwidth=1.0, width=-32)
+
+    # Data e horário a partir dos quais o lembrete fica visível (padrão: próxima hora cheia)
+    sugestao = (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+
+    rotulo("Data do lembrete", 16, 48)
+    entry_data = criar_entrada_sga(card)
+    entry_data.place(x=16, y=72, width=120, height=30)
+    entry_data.insert(0, sugestao.strftime("%d/%m/%Y"))
+
+    def selecionar_data():
+        def salvar_data():
+            entry_data.delete(0, END)
+            entry_data.insert(0, cal.selection_get().strftime('%d/%m/%Y'))
+            janela_cal.destroy()
+
+        janela_cal = Toplevel(janela)
+        janela_cal.title("Selecione a Data")
+        janela_cal.transient(janela)
+        cal = Calendar(janela_cal, selectmode='day', date_pattern='dd-mm-yyyy', mindate=datetime.now().date())
+        cal.pack(pady=20)
+        Button(janela_cal, text="Salvar", command=salvar_data).pack(pady=10)
+        janela_cal.grab_set()
+
+    criar_botao_sga(card, "Selecionar", selecionar_data, "neutro", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(x=142, y=72, width=100, height=30)
+
+    rotulo("Horário do lembrete", 280, 48)
+    combo_hora = ttk.Combobox(card, values=[f"{h:02d}" for h in range(24)], state="readonly",
+                              font=(SGA_FONTE, 10))
+    combo_hora.place(x=280, y=72, width=60, height=30)
+    combo_hora.set(sugestao.strftime("%H"))
+    Label(card, text=":", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 11, "bold")).place(x=344, y=74)
+    combo_minuto = ttk.Combobox(card, values=[f"{m:02d}" for m in range(60)], state="readonly",
+                                font=(SGA_FONTE, 10))
+    combo_minuto.place(x=356, y=72, width=60, height=30)
+    combo_minuto.set(sugestao.strftime("%M"))
+    Label(card, text="h", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 10)).place(x=420, y=76)
+
+    # Usuários que receberão o lembrete (lista dos usuários cadastrados no sistema)
+    rotulo("Usuários que receberão o lembrete", 16, 116)
+    opcoes_usuarios = [""] + listar_usuarios_sistema()
+    combos_usuario = []
+    for indice in range(QTDE_LINHAS_USUARIO_LEMBRETE):
+        y = 140 + indice * 30
+        Label(card, text=f"{indice + 1:02d}", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
+              font=(SGA_FONTE, 9)).place(x=16, y=y + 4)
+        combo = ttk.Combobox(card, values=opcoes_usuarios, state="readonly", font=(SGA_FONTE, 10))
+        combo.place(x=44, y=y, width=230, height=26)
+        combos_usuario.append(combo)
+
+    # Mensagem que será exibida aos usuários
+    rotulo("Mensagem para os usuários", 300, 116)
+    frame_mensagem = Frame(card, bg=SGA_CARD)
+    frame_mensagem.place(x=300, y=140, relwidth=1.0, width=-316, height=296)
+    scroll_mensagem = Scrollbar(frame_mensagem)
+    scroll_mensagem.pack(side=RIGHT, fill=Y)
+    texto_mensagem = criar_area_texto_sga(frame_mensagem, wrap=WORD, yscrollcommand=scroll_mensagem.set)
+    texto_mensagem.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll_mensagem.config(command=texto_mensagem.yview)
+
+    # Lembretes já agendados para este processo
+    y_lista = 140 + QTDE_LINHAS_USUARIO_LEMBRETE * 30 + 10
+    rotulo("Lembretes agendados para este processo", 16, y_lista)
+    frame_lista = Frame(card, bg=SGA_CARD)
+    frame_lista.place(x=16, y=y_lista + 24, relwidth=1.0, width=-150, relheight=1.0, height=-(y_lista + 36))
+    scroll_lista = Scrollbar(frame_lista)
+    scroll_lista.pack(side=RIGHT, fill=Y)
+    lista_lembretes = Listbox(frame_lista, font=(SGA_FONTE, 9), relief="flat", bd=0, highlightthickness=1,
+                              highlightbackground=SGA_BORDA, activestyle="none",
+                              yscrollcommand=scroll_lista.set)
+    lista_lembretes.pack(side=LEFT, fill=BOTH, expand=True)
+    scroll_lista.config(command=lista_lembretes.yview)
+    lembretes_exibidos = []
+
+    detalhe_lista = Label(janela, text="Selecione um lembrete na lista para ver os usuários e a mensagem.",
+                          bg=SGA_FUNDO, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 8), anchor="w", justify="left",
+                          wraplength=710)
+    detalhe_lista.place(x=20, rely=1.0, y=-66, anchor="sw", relwidth=1.0, width=-40)
+
+    def montar_lista():
+        lista_lembretes.delete(0, END)
+        lembretes_exibidos.clear()
+        for lembrete in listar_lembretes(processo_id):
+            cientes = len([u for u, data_ciencia in lembrete["usuarios"] if data_ciencia])
+            lista_lembretes.insert(END, f"{_formatar_data_hora_lembrete(lembrete['data_hora_exibicao'])}  |  "
+                                        f"{len(lembrete['usuarios'])} usuário(s), {cientes} ciente(s)  |  "
+                                        f"por {lembrete['criado_por'] or '-'}")
+            lembretes_exibidos.append(lembrete)
+
+    def ao_selecionar(event=None):
+        selecao = lista_lembretes.curselection()
+        if not selecao:
+            return
+        lembrete = lembretes_exibidos[selecao[0]]
+        usuarios = ", ".join(f"{u} (ciente)" if data_ciencia else u for u, data_ciencia in lembrete["usuarios"])
+        mensagem = " ".join((lembrete["mensagem"] or "").split())
+        if len(mensagem) > 160:
+            mensagem = mensagem[:160] + "..."
+        detalhe_lista.config(text=f"Usuários: {usuarios}\nMensagem: {mensagem}")
+
+    lista_lembretes.bind("<<ListboxSelect>>", ao_selecionar)
+
+    def cancelar_selecionado():
+        selecao = lista_lembretes.curselection()
+        if not selecao:
+            messagebox.showwarning("Atenção", "Selecione um lembrete na lista.", parent=janela)
+            return
+        if messagebox.askyesno("Cancelar Lembrete", "Deseja cancelar o lembrete selecionado?", parent=janela):
+            cancelar_lembrete(lembretes_exibidos[selecao[0]]["id"])
+            detalhe_lista.config(text="")
+            montar_lista()
+
+    criar_botao_sga(card, "Cancelar\nlembrete", cancelar_selecionado, "perigo", fonte=(SGA_FONTE, 9, "bold")
+                    ).place(relx=1.0, x=-16, y=y_lista + 24, anchor="ne", width=100, height=44)
+
+    montar_lista()
+
+    def salvar():
+        try:
+            data = datetime.strptime(entry_data.get().strip(), "%d/%m/%Y")
+        except ValueError:
+            messagebox.showwarning("Atenção", "Informe a data no formato DD/MM/AAAA.", parent=janela)
+            return
+        data_hora_exibicao = data.replace(hour=int(combo_hora.get()), minute=int(combo_minuto.get()))
+        if data_hora_exibicao <= datetime.now():
+            messagebox.showwarning("Atenção", "A data e o horário do lembrete devem ser posteriores ao "
+                                              "momento atual.", parent=janela)
+            return
+
+        usuarios = []
+        for combo in combos_usuario:
+            usuario = combo.get().strip()
+            if usuario and usuario not in usuarios:
+                usuarios.append(usuario)
+        if not usuarios:
+            messagebox.showwarning("Atenção", "Selecione ao menos um usuário.", parent=janela)
+            return
+
+        mensagem = texto_mensagem.get("1.0", END).strip()
+        if not mensagem:
+            messagebox.showwarning("Atenção", "Informe a mensagem do lembrete.", parent=janela)
+            texto_mensagem.focus_set()
+            return
+
+        criar_lembrete(processo_id, data_hora_exibicao, usuarios, mensagem, obter_nome_usuario_logado())
+        messagebox.showinfo("Sucesso",
+                            f"Lembrete agendado para {data_hora_exibicao.strftime('%d/%m/%Y - %H:%Mh')}.\n\n"
+                            f"Ele será exibido para {len(usuarios)} usuário(s) no login, a partir dessa "
+                            f"data e horário.", parent=janela)
+        for combo in combos_usuario:
+            combo.set("")
+        texto_mensagem.delete("1.0", END)
+        montar_lista()
+
+    criar_botao_sga(janela, "Salvar", salvar, "primario"
+                    ).place(relx=0.5, x=-130, rely=1.0, y=-24, anchor="sw", width=120, height=38)
+    criar_botao_sga(janela, "Voltar", janela.destroy, "neutro"
+                    ).place(relx=0.5, x=10, rely=1.0, y=-24, anchor="sw", width=120, height=38)
+
+    janela.grab_set()
+
+
 def tela_ver_processo(parent, processo_id, callback_atualizar):
     """Janela 'Processo - {Título}': histórico completo, em ordem CRONOLÓGICA, com
     documentos anexados, cancelamento individual de cada lançamento, e os botões
-    IMPRIMIR / VOLTAR / CONCLUIR. (O cancelamento do processo inteiro é feito pelo
+    IMPRIMIR / VOLTAR / CONCLUIR / AGENDAR. (O cancelamento do processo inteiro é feito pelo
     botão 'C' na tela do índice, não mais aqui.)"""
     processo = buscar_processo(processo_id)
     if not processo:
@@ -10397,6 +10773,21 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
     inner_historico = criar_area_rolavel(historico_frame, bg=SGA_FUNDO)
 
     estado = {"lancamentos": [], "status_processo": status_processo, "cancelado_por": cancelado_por}
+    processo_finalizado = status_processo in STATUS_FINALIZADOS
+
+    def avisar_se_finalizado():
+        """Confere o status atual no banco (a janela pode estar aberta há algum tempo).
+        Retorna True, após avisar o usuário, se o processo estiver cancelado ou concluído."""
+        atual = buscar_processo(processo_id)
+        status_atual = atual[3] if atual else None
+        if status_atual in STATUS_FINALIZADOS:
+            messagebox.showwarning(
+                "Processo " + status_atual,
+                f"O processo está {status_atual} e não permite alterações.\n\n"
+                f"Para alterá-lo, reabra-o primeiro pelo botão 'A' (Atualizar) do índice.",
+                parent=janela)
+            return True
+        return False
 
     # As descrições acompanham a largura da janela: quando ela é maximizada, o texto
     # passa a quebrar linha mais à direita (a partir do valor original de 880).
@@ -10432,7 +10823,7 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             "Os documentos anexados a ele ficarão inacessíveis (serão removidos do banco "
             "de dados). O texto do lançamento permanece no histórico, tachado.",
             parent=janela)
-        if confirmar:
+        if confirmar and not avisar_se_finalizado():
             cancelar_lancamento(lancamento_id, obter_nome_usuario_logado())
             montar_historico()
 
@@ -10447,7 +10838,7 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             "Deseja excluir DEFINITIVAMENTE este lançamento cancelado?\n\n"
             "Ele será removido do histórico do processo e essa ação não poderá ser desfeita.",
             parent=janela)
-        if confirmar:
+        if confirmar and not avisar_se_finalizado():
             excluir_lancamento(lancamento_id)
             montar_historico()
 
@@ -10490,8 +10881,8 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
             if not cancelado:
                 lancamento_conclusao = str(lanc["descricao"] or "").startswith(PREFIXO_DESCRICAO_CONCLUSAO)
 
-            if lancamento_conclusao:
-                pass  # lançamento da conclusão do processo: sem botões "Cancelar" e "Excluir"
+            if lancamento_conclusao or processo_finalizado:
+                pass  # conclusão do processo, ou processo cancelado/concluído: sem "Cancelar" e "Excluir"
             elif not cancelado:
                 criar_botao_sga(topo, "Cancelar", lambda lid=lanc["id"]: cancelar_este_lancamento(lid),
                                 "neutro", fonte=(SGA_FONTE, 8), padx=8, pady=1
@@ -10544,6 +10935,8 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
                             estado["status_processo"], estado["cancelado_por"])
 
     def concluir():
+        if avisar_se_finalizado():
+            return
         confirmar = messagebox.askyesno(
             "Confirmar Conclusão",
             f"Deseja concluir o processo '{titulo}'?",
@@ -10561,13 +10954,22 @@ def tela_ver_processo(parent, processo_id, callback_atualizar):
         janela.destroy()
         callback_atualizar()
 
+    def agendar():
+        tela_agendar_lembrete(janela, processo_id, titulo)
+
+    # Processo cancelado ou concluído não exibe o CONCLUIR (só volta após ser reaberto)
+    botoes_rodape = [("IMPRIMIR", imprimir, "primario"), ("VOLTAR", voltar, "aviso")]
+    if not processo_finalizado:
+        botoes_rodape.append(("CONCLUIR", concluir, "sucesso"))
+    botoes_rodape.append(("AGENDAR", agendar, "agendar"))
+
     rodape = criar_rodape_sga(janela)
-    criar_botao_sga(rodape, "IMPRIMIR", imprimir, "primario"
-                    ).place(relx=0.5, x=-240, rely=0.5, anchor="w", width=140, height=40)
-    criar_botao_sga(rodape, "VOLTAR", voltar, "aviso"
-                    ).place(relx=0.5, x=-70, rely=0.5, anchor="w", width=140, height=40)
-    criar_botao_sga(rodape, "CONCLUIR", concluir, "sucesso"
-                    ).place(relx=0.5, x=100, rely=0.5, anchor="w", width=140, height=40)
+    largura_botao, espaco_botoes = 140, 30
+    x_inicial = -(len(botoes_rodape) * largura_botao + (len(botoes_rodape) - 1) * espaco_botoes) // 2
+    for posicao, (texto_botao, comando_botao, estilo_botao) in enumerate(botoes_rodape):
+        criar_botao_sga(rodape, texto_botao, comando_botao, estilo_botao
+                        ).place(relx=0.5, x=x_inicial + posicao * (largura_botao + espaco_botoes),
+                                rely=0.5, anchor="w", width=largura_botao, height=40)
 
 
 def cmd_click24():
@@ -10684,7 +11086,7 @@ def cmd_click24():
                   anchor="w", justify="left", wraplength=780
                   ).pack(side=LEFT, fill=X, expand=True, padx=(14, 0), pady=9)
 
-            if status != STATUS_CANCELADO:
+            if status not in STATUS_FINALIZADOS:  # cancelado ou concluído: sem o botão "C"
                 btn_c = criar_botao_sga(linha, "C", lambda pid=processo_id, tit=titulo: cancelar_este_processo(pid, tit),
                                         "perigo", fonte=(SGA_FONTE, 9, "bold"), width=3, pady=2)
                 btn_c.pack(side=LEFT, padx=3, pady=6)
@@ -10703,6 +11105,15 @@ def cmd_click24():
             Frame(inner_indice, bg="#E5EAF1", height=1).pack(fill=X)
 
     def cancelar_este_processo(processo_id, titulo_processo):
+        processo = buscar_processo(processo_id)
+        if processo and processo[3] in STATUS_FINALIZADOS:
+            messagebox.showwarning(
+                "Processo " + processo[3],
+                f"O processo '{titulo_processo}' está {processo[3]} e não pode ser cancelado.\n\n"
+                f"Para alterá-lo, reabra-o primeiro pelo botão 'A' (Atualizar).",
+                parent=indice_win)
+            montar_indice()
+            return
         confirmar = messagebox.askyesno(
             "Confirmar Cancelamento",
             f"Deseja realmente cancelar o processo '{titulo_processo}'?\n\n"
@@ -10783,6 +11194,7 @@ def realizar_login():
             messagebox.showinfo("Login", "Login realizado com sucesso!")
             login_window.destroy()
             root.deiconify()  # Mostra a janela principal
+            root.after(300, lambda: exibir_lembretes_sga_do_usuario(usuario))  # lembretes do SGA (Click_24)
     else:
         messagebox.showerror("Erro", "Usuário ou senha inválidos.")
         entry_senha.delete(0, END)
@@ -10814,6 +11226,7 @@ def trocar_senha(usuario):
         janela_troca_senha.destroy()
         login_window.destroy()
         root.deiconify()  # Mostra a janela principal
+        root.after(300, lambda: exibir_lembretes_sga_do_usuario(usuario))  # lembretes do SGA (Click_24)
 
     janela_troca_senha = Toplevel(root)
     janela_troca_senha.title("Trocar Senha")
