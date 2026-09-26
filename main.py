@@ -1,4 +1,4 @@
-# Código atualizado em 21-09-26 – deixar verde a barra da esquerda quando concluído)
+# Código atualizado em 26-09-26 – 1027 - (Alterado processo concluido e cancelado)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
