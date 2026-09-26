@@ -9738,7 +9738,7 @@ def garantir_banco_sga():
                         caminho_armazenado TEXT NOT NULL,
                         FOREIGN KEY(lancamento_id) REFERENCES sga_lancamentos(id))''')
 
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_lembretes (
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_agendamentos (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         processo_id INTEGER NOT NULL,
                         data_hora_exibicao TEXT NOT NULL,
@@ -9749,12 +9749,12 @@ def garantir_banco_sga():
                         FOREIGN KEY(processo_id) REFERENCES sga_processos(id))''')
 
     # Um registro por usuário lembrado; data_ciencia preenchida quando ele clica em "Ciente"
-    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_lembretes_usuarios (
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sga_agendamentos_usuarios (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         lembrete_id INTEGER NOT NULL,
                         usuario TEXT NOT NULL,
                         data_ciencia TEXT,
-                        FOREIGN KEY(lembrete_id) REFERENCES sga_lembretes(id))''')
+                        FOREIGN KEY(lembrete_id) REFERENCES sga_agendamentos(id))''')
 
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "status", "TEXT DEFAULT 'ATIVO'")
     _adicionar_coluna_se_necessario(cursor, "sga_lancamentos", "cancelado_por", "TEXT")
@@ -10401,12 +10401,12 @@ def criar_lembrete(processo_id, data_hora_exibicao, usuarios, mensagem, criado_p
     conexao = sqlite3.connect(BANCO_SGA)
     cursor = conexao.cursor()
     cursor.execute(
-        "INSERT INTO sga_lembretes (processo_id, data_hora_exibicao, mensagem, criado_por, data_criacao, status) "
+        "INSERT INTO sga_agendamentos (processo_id, data_hora_exibicao, mensagem, criado_por, data_criacao, status) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (processo_id, data_hora_exibicao.strftime(FORMATO_DATA_HORA_LEMBRETE), mensagem, criado_por,
          datetime.now().strftime("%d/%m/%Y %H:%M:%S"), STATUS_LEMBRETE_ATIVO))
     lembrete_id = cursor.lastrowid
-    cursor.executemany("INSERT INTO sga_lembretes_usuarios (lembrete_id, usuario) VALUES (?, ?)",
+    cursor.executemany("INSERT INTO sga_agendamentos_usuarios (lembrete_id, usuario) VALUES (?, ?)",
                        [(lembrete_id, usuario) for usuario in usuarios])
     conexao.commit()
     conexao.close()
@@ -10419,12 +10419,12 @@ def listar_lembretes(processo_id):
     conexao = sqlite3.connect(BANCO_SGA)
     cursor = conexao.cursor()
     cursor.execute(
-        "SELECT id, data_hora_exibicao, mensagem, criado_por FROM sga_lembretes "
+        "SELECT id, data_hora_exibicao, mensagem, criado_por FROM sga_agendamentos "
         "WHERE processo_id = ? AND status = ? ORDER BY data_hora_exibicao ASC",
         (processo_id, STATUS_LEMBRETE_ATIVO))
     resultado = []
     for lembrete_id, data_hora_exibicao, mensagem, criado_por in cursor.fetchall():
-        cursor.execute("SELECT usuario, data_ciencia FROM sga_lembretes_usuarios WHERE lembrete_id = ? "
+        cursor.execute("SELECT usuario, data_ciencia FROM sga_agendamentos_usuarios WHERE lembrete_id = ? "
                        "ORDER BY id ASC", (lembrete_id,))
         resultado.append({"id": lembrete_id, "data_hora_exibicao": data_hora_exibicao, "mensagem": mensagem,
                           "criado_por": criado_por, "usuarios": cursor.fetchall()})
@@ -10435,7 +10435,7 @@ def listar_lembretes(processo_id):
 def cancelar_lembrete(lembrete_id):
     conexao = sqlite3.connect(BANCO_SGA)
     cursor = conexao.cursor()
-    cursor.execute("UPDATE sga_lembretes SET status = ? WHERE id = ?", (STATUS_LEMBRETE_CANCELADO, lembrete_id))
+    cursor.execute("UPDATE sga_agendamentos SET status = ? WHERE id = ?", (STATUS_LEMBRETE_CANCELADO, lembrete_id))
     conexao.commit()
     conexao.close()
 
@@ -10447,8 +10447,8 @@ def listar_lembretes_pendentes_usuario(usuario):
     cursor = conexao.cursor()
     cursor.execute(
         "SELECT lu.id, p.titulo, l.mensagem, l.criado_por, l.data_hora_exibicao "
-        "FROM sga_lembretes_usuarios lu "
-        "JOIN sga_lembretes l ON l.id = lu.lembrete_id "
+        "FROM sga_agendamentos_usuarios lu "
+        "JOIN sga_agendamentos l ON l.id = lu.lembrete_id "
         "JOIN sga_processos p ON p.id = l.processo_id "
         "WHERE LOWER(lu.usuario) = ? AND lu.data_ciencia IS NULL AND l.status = ? "
         "AND l.data_hora_exibicao <= ? ORDER BY l.data_hora_exibicao ASC",
@@ -10461,7 +10461,7 @@ def listar_lembretes_pendentes_usuario(usuario):
 def registrar_ciencia_lembrete(lembrete_usuario_id):
     conexao = sqlite3.connect(BANCO_SGA)
     cursor = conexao.cursor()
-    cursor.execute("UPDATE sga_lembretes_usuarios SET data_ciencia = ? WHERE id = ?",
+    cursor.execute("UPDATE sga_agendamentos_usuarios SET data_ciencia = ? WHERE id = ?",
                    (datetime.now().strftime("%d/%m/%Y %H:%M:%S"), lembrete_usuario_id))
     conexao.commit()
     conexao.close()
