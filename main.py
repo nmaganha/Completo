@@ -8782,7 +8782,7 @@ def abrir_visualizador_destaque(doc, ocorrencias, localidade, subtipo, caminho_p
     abas = ttk.Notebook(corpo)
     frame_lista = Frame(abas)
     lista = Listbox(frame_lista, font=("Consolas", 9), activestyle="none",
-                    selectbackground="#00ffff", exportselection=False)
+    selectbackground="#00ffff", exportselection=False)
     scroll_lista = Scrollbar(frame_lista, orient=VERTICAL, command=lista.yview)
     lista.configure(yscrollcommand=scroll_lista.set)
     scroll_lista.pack(side=RIGHT, fill=Y)
