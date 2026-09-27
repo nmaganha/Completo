@@ -1,4 +1,4 @@
-# Código atualizado em 26-09-26 – 1027 - (Alterado processo concluido e cancelado)
+# Código atualizado em 26-09-26 – 2200 - (Alterado o click_22 - destaque dos procedimentos)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -8515,15 +8515,15 @@ def cmd_click21():
 # A busca ignora acentos, maiúsculas/minúsculas, hífens e quebras de linha.
 # Para incluir siglas ou nomes alternativos (ex.: "FGO"), basta acrescentar na lista.
 TERMOS_BUSCA_INSTALACAO = {
-    "UHE Müller de Godoy Pereira": ["Müller de Godoy Pereira", "Muller de Godoy", "Godoy Pereira"],
-    "UHE São José": ["São José"],
-    "UHE Ferreira Gomes": ["Ferreira Gomes"],
-    "SE Macapá": ["Macapá"],
-    "SE Itaguaçu": ["Itaguaçu"],
-    "SE Russas-II": ["Russas II", "Russas 2"],
-    "CGE Pitombeira": ["Pitombeira"],
-    "CGE Jandaíra-III": ["Jandaíra III", "Jandaíra 3"],
-    "UFV Pitombeira": ["Pitombeira"],
+    "UHE Müller de Godoy Pereira": ["Müller de Godoy Pereira", "Muller de Godoy", "Godoy Pereira", "J.L.M.G.PEREIRA" , "JLM G. PEREIRA", "Eng.José Luiz","Foz do Rio Claro", "ALUPAR", "AF ENERGIA"],
+    "UHE São José": ["São José", "ALUPAR", "AF ENERGIA"],
+    "UHE Ferreira Gomes": ["Ferreira Gomes", "ALUPAR", "AF ENERGIA"],
+    "SE Macapá": ["Macapá", "Ferreira Gomes", "ALUPAR", "AF ENERGIA"],
+    "SE Itaguaçu": ["Itaguaçu", "J.L.M.G.PEREIRA" , "JLM G. PEREIRA", "Eng.José Luiz", "Müller de Godoy Pereira", "Muller de Godoy", "Godoy Pereira","Foz do Rio Claro", "ALUPAR", "AF ENERGIA"],
+    "SE Russas-II": ["Russas II", "Russas 2", "Pitombeira", "ALUPAR", "AF ENERGIA"],
+    "CGE Pitombeira": ["Pitombeira", "Ubatuba", "Santa Catarina", "Ventos de horizonte", "Goiabeira", "ALUPAR", "AF ENERGIA"],
+    "CGE Jandaíra-III": ["Jandaíra III", "Jandaíra 3", "ALUPAR", "AF ENERGIA"],
+    "UFV Pitombeira": ["Pitombeira", "ALUPAR", "AF ENERGIA"],
 }
 
 COR_DESTAQUE_PDF = (1.0, 0.92, 0.23)  # amarelo marca-texto
@@ -8782,7 +8782,7 @@ def abrir_visualizador_destaque(doc, ocorrencias, localidade, subtipo, caminho_p
     abas = ttk.Notebook(corpo)
     frame_lista = Frame(abas)
     lista = Listbox(frame_lista, font=("Consolas", 9), activestyle="none",
-                    selectbackground="#024593", exportselection=False)
+    selectbackground="#00ffff", exportselection=False)
     scroll_lista = Scrollbar(frame_lista, orient=VERTICAL, command=lista.yview)
     lista.configure(yscrollcommand=scroll_lista.set)
     scroll_lista.pack(side=RIGHT, fill=Y)
