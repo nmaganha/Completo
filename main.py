@@ -1,4 +1,4 @@
-# Código atualizado em 06-10-26 – 21:42h - (Click25: ajustes do ATEIE - status, emissão e nome completo)
+# Código atualizado em 06-10-26 – 23:00h - (Click25: ajustes do ATEIE - status, emissão e nome completo)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -12002,8 +12002,9 @@ STATUS_ATEIE_CONCLUIDO = "Concluído"
 STATUS_ATEIE_CANCELADO = "Cancelado"
 DOC_LIB_STATUS_ATEIE = [STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_EM_EXECUCAO,
                         STATUS_ATEIE_CONCLUIDO, STATUS_ATEIE_CANCELADO]
-# Um ATEIE concluído ou já cancelado não pode ser cancelado
-DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_EM_EXECUCAO)
+# Só é possível cancelar um ATEIE "Em análise" ou "Aprovada": depois que entra em execução, o ATEIE somente
+# pode ser concluído (procedimento); concluído e cancelado também não podem ser cancelados
+DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA)
 
 # Colunas 2 a 13 da tabela de intervenções: (campo no banco, cabeçalho, descrição, tipo)
 DOC_LIB_COLUNAS_INTERVENCAO = [
@@ -12046,7 +12047,11 @@ class DocLibConflito(Exception):
 
 
 class DocLibBloqueado(Exception):
-    """Tentativa de alterar dados protegidos de um ATEIE já emitido (gerado)."""
+    """Tentativa de alterar dados protegidos (ATEIE já emitido, execução já salva ou ainda não permitida)."""
+
+
+class DocLibRegra(Exception):
+    """Dado de execução que contraria uma regra de data do ATEIE (colunas 6 e 10)."""
 
 
 # ---------------------------------------------------
@@ -12360,15 +12365,59 @@ def doc_lib_numeros_previstos(quantidade, tipo="ATEIE"):
     return [doc_lib_formatar_numero(ultimo + posicao, ano) for posicao in range(1, quantidade + 1)]
 
 
-def doc_lib_diferencas_bloqueadas(atual, dados):
-    """Lista o que, nos dados recebidos, difere do que está gravado em um ATEIE já EMITIDO e que não pode
-    mais mudar: dados gerais, De acordo, Pessoal Notificado e colunas 1 a 5 (número e programação) de cada
-    ATEIE. Somente as colunas 6 a 13 podem ser alteradas depois da emissão. Lista vazia = nada bloqueado foi
-    alterado."""
+def doc_lib_erros_datas_execucao(item, gravado=None):
+    """Regras de data da execução de um ATEIE (item = linha da tabela):
+      - coluna 6 (data de início efetivo) tem de ser IGUAL à coluna 2 (data de início programado);
+      - coluna 10 (data de término efetivo) não pode ser ANTERIOR à coluna 4 (data de término programado);
+        posterior pode.
+    Um grupo que já está gravado e não foi alterado não é revalidado ('gravado' = linha como está no banco).
+    Retorna [(campo, mensagem)]."""
+    def valor(chave):
+        return str(item.get(chave) or "").strip()
+
+    def inalterado(chaves):
+        return gravado is not None and all(str(gravado.get(c) or "").strip() == valor(c) for c in chaves)
+
+    def dia(texto):
+        normal = doc_lib_normalizar_data(texto)
+        return datetime.strptime(normal, "%d/%m/%Y") if normal else None
+
+    erros = []
+    prog, real = dia(valor("prev_data_inicio")), dia(valor("real_data_inicio"))
+    if prog and real and real != prog and not inalterado(DOC_LIB_CAMPOS_INICIO):
+        erros.append(("real_data_inicio",
+                      f"a data de início efetivo (coluna 6) deve ser igual à data de início programado "
+                      f"(coluna 2: {valor('prev_data_inicio')})."))
+    prog, real = dia(valor("prev_data_termino")), dia(valor("real_data_termino"))
+    if prog and real and real < prog and not inalterado(DOC_LIB_CAMPOS_TERMINO):
+        erros.append(("real_data_termino",
+                      f"a data de término efetivo (coluna 10) não pode ser anterior à data de término programado "
+                      f"(coluna 4: {valor('prev_data_termino')}); posterior pode."))
+    return erros
+
+
+def doc_lib_diferencas_bloqueadas(atual, dados, emitido=True):
+    """Lista o que, nos dados recebidos, difere do gravado e NÃO pode ser alterado.
+
+    ATEIE já EMITIDO (documento gerado): dados gerais, De acordo, Pessoal Notificado e colunas 1 a 5 de cada ATEIE
+    ficam protegidos; além disso, quando as quatro colunas de início efetivo (6 a 9) ou as quatro de término efetivo
+    (10 a 13) já estão preenchidas e salvas, esse grupo não pode mais ser alterado.
+    ATEIE ainda NÃO emitido: as colunas 6 a 13 (execução) não podem ser informadas antes da geração do documento.
+    Lista vazia = nada protegido foi alterado."""
     def texto(valor):
         return str(valor or "").strip()
 
+    gravadas = {item["ordem"]: item for item in atual.get("intervencoes") or []}
     diferencas = []
+
+    if not emitido:
+        for item in sorted(dados.get("intervencoes") or [], key=lambda i: i["ordem"]):
+            gravada = gravadas.get(item["ordem"], {})
+            if any(texto(gravada.get(chave)) != texto(item.get(chave)) for chave in DOC_LIB_CAMPOS_EXECUCAO):
+                diferencas.append(f"Linha {item['ordem']}: as colunas 6 a 13 só podem ser informadas depois que o "
+                                  f"documento for gerado")
+        return diferencas
+
     for chave, nome in (("classificacao", "Classificação dos Trabalhos"), ("equipamento", "Equipamento de Interligação"),
                         ("empresa", "Empresa Solicitante"), ("empresa_outra", "Empresa Solicitante (OUTRA)"),
                         ("local", "Local"), ("servicos", "Serviços a Executar"), ("observacoes", "Observações"),
@@ -12388,15 +12437,22 @@ def doc_lib_diferencas_bloqueadas(atual, dados):
             != linhas_nao_vazias(dados.get("pessoal") or [], chaves_pessoal):
         diferencas.append("Pessoal Notificado")
 
-    gravadas = {item["ordem"]: item for item in atual.get("intervencoes") or []}
     for item in sorted(dados.get("intervencoes") or [], key=lambda i: i["ordem"]):
         ordem = item["ordem"]
         gravada = gravadas.get(ordem)
         if gravada is None:
             if any(texto(item.get(chave)) for chave, _, _, _ in DOC_LIB_COLUNAS_INTERVENCAO):
                 diferencas.append(f"Linha {ordem}: não é possível incluir novos ATEIE depois da emissão")
-        elif any(texto(gravada.get(chave)) != texto(item.get(chave)) for chave in DOC_LIB_CAMPOS_PROGRAMADOS):
+            continue
+        if any(texto(gravada.get(chave)) != texto(item.get(chave)) for chave in DOC_LIB_CAMPOS_PROGRAMADOS):
             diferencas.append(f"Linha {ordem} ({gravada['numero']}): colunas 1 a 5 (número e programação)")
+        if gravada.get("status") == STATUS_ATEIE_CANCELADO:
+            continue
+        for chaves, colunas, nome in ((DOC_LIB_CAMPOS_INICIO, "6 a 9", "início efetivo"),
+                                      (DOC_LIB_CAMPOS_TERMINO, "10 a 13", "término efetivo")):
+            if all(texto(gravada.get(chave)) for chave in chaves) \
+                    and any(texto(gravada.get(chave)) != texto(item.get(chave)) for chave in chaves):
+                diferencas.append(f"Linha {ordem} ({gravada['numero']}): colunas {colunas} ({nome} já salvo)")
     return diferencas
 
 
@@ -12408,7 +12464,10 @@ def doc_lib_salvar_ateie(dados, usuario):
     - ATEIE já numerado: mantém o número; só os dados são atualizados.
     - ATEIE cancelado: não é alterado.
     - Documento já EMITIDO (gerado): dados gerais, De acordo, Pessoal Notificado e colunas 1 a 5 ficam
-      protegidos (DocLibBloqueado se houver tentativa de alterá-los); só as colunas 6 a 13 são gravadas.
+      protegidos, e o grupo de início (6 a 9) ou de término (10 a 13) já preenchido e salvo não muda mais
+      (DocLibBloqueado se houver tentativa); só o restante das colunas 6 a 13 é gravado.
+    - Antes da emissão as colunas 6 a 13 não podem ser informadas (DocLibBloqueado).
+    - Datas da execução: coluna 6 igual à coluna 2; coluna 10 não anterior à coluna 4 (DocLibRegra).
     - O status de cada ATEIE é recalculado a cada gravação (doc_lib_calcular_status).
     - Lança DocLibConflito se outra pessoa salvou o documento depois que ele foi aberto."""
     dados = doc_lib_normalizar_ateie(dados)
@@ -12420,9 +12479,32 @@ def doc_lib_salvar_ateie(dados, usuario):
         cursor.execute("BEGIN IMMEDIATE")
         ateie_id = dados.get("id")
         emitido = False
+        atual = None
         campos_gerais = (dados["classificacao"], dados["equipamento"], dados["empresa"], dados["empresa_outra"],
                          dados["local"], dados["servicos"], dados["observacoes"], dados["documentos_vinculados"],
                          dados["nota"])
+
+        if ateie_id is not None:
+            atual = _doc_lib_ler_ateie(conexao, ateie_id)
+            if atual is None or atual["revisao"] != dados.get("revisao"):
+                raise DocLibConflito("Este ATEIE foi alterado por outro usuário depois de aberto nesta janela.\n\n"
+                                     "Feche-o e abra-o novamente (Abrir ATEIE salvo) para ver a versão atual.")
+            emitido = bool(atual["emitido"])
+        bloqueadas = doc_lib_diferencas_bloqueadas(atual or {}, dados, emitido)
+        if bloqueadas:
+            if emitido:
+                cabecalho = ("Este ATEIE já foi emitido (documento gerado). Somente as colunas 6 a 13 da tabela de "
+                             "intervenções podem ser alteradas, e o início efetivo (6 a 9) ou o término efetivo "
+                             "(10 a 13) já salvo não muda mais.")
+            else:
+                cabecalho = "Dados de execução não são aceitos antes da geração do documento."
+            raise DocLibBloqueado(cabecalho + "\n\nAlterações recusadas: " + "; ".join(bloqueadas) + ".")
+        gravadas = {item["ordem"]: item for item in (atual or {}).get("intervencoes") or []}
+        violacoes = [f"Linha {item['ordem']}: {mensagem}" for item in dados["intervencoes"]
+                     if gravadas.get(item["ordem"], {}).get("status") != STATUS_ATEIE_CANCELADO
+                     for _, mensagem in doc_lib_erros_datas_execucao(item, gravadas.get(item["ordem"]))]
+        if violacoes:
+            raise DocLibRegra("Dados de execução recusados:\n\n" + "\n".join(violacoes))
 
         if ateie_id is None:
             cursor.execute(
@@ -12435,17 +12517,7 @@ def doc_lib_salvar_ateie(dados, usuario):
                                  agora_texto))
             ateie_id = cursor.lastrowid
         else:
-            atual = _doc_lib_ler_ateie(conexao, ateie_id)
-            if atual is None or atual["revisao"] != dados.get("revisao"):
-                raise DocLibConflito("Este ATEIE foi alterado por outro usuário depois de aberto nesta janela.\n\n"
-                                     "Feche-o e abra-o novamente (Abrir ATEIE salvo) para ver a versão atual.")
-            emitido = bool(atual["emitido"])
             if emitido:
-                bloqueadas = doc_lib_diferencas_bloqueadas(atual, dados)
-                if bloqueadas:
-                    raise DocLibBloqueado("Este ATEIE já foi emitido (documento gerado). Somente as colunas 6 a 13 "
-                                          "da tabela de intervenções podem ser alteradas.\n\nAlterações recusadas: "
-                                          + "; ".join(bloqueadas) + ".")
                 cursor.execute("UPDATE doclib_ateie SET revisao = revisao + 1, atualizado_por = ?, "
                                "atualizado_em = ? WHERE id = ?", (usuario, agora_texto, ateie_id))
             else:
@@ -12562,8 +12634,9 @@ def doc_lib_listar_ateie():
 
 def doc_lib_cancelar_intervencao(ateie_id, ordem, usuario, justificativa, revisao_esperada):
     """Cancela SOMENTE o ATEIE (intervenção) indicado: os demais ATEIE do mesmo documento continuam com o
-    status que tinham. O número cancelado fica registrado e nunca é reaproveitado. Um ATEIE já concluído ou já
-    cancelado não pode ser cancelado (ValueError). Devolve a nova revisão do documento."""
+    status que tinham. O número cancelado fica registrado e nunca é reaproveitado. Só é possível cancelar um
+    ATEIE "Em análise" ou "Aprovada": em execução ele somente pode ser concluído, e concluído ou já cancelado
+    não cancela (ValueError). Devolve a nova revisão do documento."""
     agora_texto = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
     conexao = doc_lib_conectar(manual=True)
     cursor = conexao.cursor()
@@ -12638,8 +12711,9 @@ def doc_lib_normalizar_ateie(dados):
     return novo
 
 
-def doc_lib_validar_ateie(dados):
-    """Valida o ATEIE (antes de salvar e antes de gerar o documento).
+def doc_lib_validar_ateie(dados, atual=None):
+    """Valida o ATEIE (antes de salvar e antes de gerar o documento). 'atual' é o documento como está gravado
+    (quando já existe): execução já gravada e inalterada não é revalidada nas regras de data.
 
     Retorna uma lista de (chaves_dos_campos, mensagem); lista vazia = documento válido.
     Opcionais: De acordo, Observações, Documentos Internos Vinculados e Nota. Na tabela de intervenções são
@@ -12704,6 +12778,7 @@ def doc_lib_validar_ateie(dados):
     validar_linhas(dados.get("pessoal") or [], DOC_LIB_COLUNAS_PESSOAL, "pessoal", "Pessoal Notificado")
 
     # Tabela de intervenções
+    gravadas = {item["ordem"]: item for item in (atual or {}).get("intervencoes") or []}
     intervencoes_usadas = 0
     for item in dados.get("intervencoes") or []:
         if item.get("status") == STATUS_ATEIE_CANCELADO:
@@ -12746,6 +12821,9 @@ def doc_lib_validar_ateie(dados):
                 erros.append(((f"interv:{ordem}:{ausente}",),
                               f"{titulo}: preencha também {_DOC_LIB_DESCRICAO_CAMPO[ausente]} "
                               f"(data e hora do {nome} andam juntas)."))
+        for campo, mensagem in doc_lib_erros_datas_execucao(valores, gravadas.get(ordem)):
+            erros.append(((f"interv:{ordem}:{campo}",), f"{titulo}: {mensagem}"))
+
         inicio_real = _doc_lib_data_hora(valores["real_data_inicio"], valores["real_hora_inicio"])
         termino_real = _doc_lib_data_hora(valores["real_data_termino"], valores["real_hora_termino"])
         if inicio_real and termino_real and termino_real < inicio_real:
@@ -13890,8 +13968,11 @@ class JanelaAteie:
         self.solicitado_por = obter_nome_completo_usuario(self.solicitado_por_usuario)
         self.data_preenchimento = agora.strftime("%d/%m/%Y")
         self.hora_preenchimento = agora.strftime("%H:%M")
-        self.estado_intervencoes = [{"numero": "", "status": "", "provisorio": False}
+        # por linha: número, status e se os grupos de execução (6 a 9 e 10 a 13) já estão salvos completos (travados)
+        self.estado_intervencoes = [{"numero": "", "status": "", "provisorio": False,
+                                     "inicio_travado": False, "termino_travado": False}
                                     for _ in range(DOC_LIB_LINHAS_INTERVENCOES)]
+        self._doc_gravado = None      # o ATEIE como está gravado no banco (None enquanto for novo)
         self._controles = []          # campos travados/liberados em bloco
         self._alvos = {}              # chave de campo -> (widget com contorno ou None, rótulo)
         self._marcados = {}           # widget -> cores originais do contorno
@@ -13917,6 +13998,7 @@ class JanelaAteie:
         self._montar_cabecalho()
         self._montar_formulario()
         self._montar_rodape()
+        self._aplicar_bloqueios()     # documento novo: tudo editável, exceto as colunas 6 a 13 (só depois de gerar)
         self._atualizar_estado()
         self._assinatura_ref = self._assinatura()
         self.janela.after(300, self._avisar_sem_nome_completo)
@@ -14054,7 +14136,11 @@ class JanelaAteie:
                            "término programados estiverem preenchidas, e o status é automático: Em análise (salvo), "
                            "Aprovada (documento gerado), Em Execução (colunas 6 a 9 preenchidas), Concluído "
                            "(colunas 10 a 13 preenchidas) ou Cancelado. Depois de gerado o documento, somente as "
-                           "colunas 6 a 13 podem ser alteradas. Duplo clique em uma data abre o calendário.",
+                           "colunas 6 a 13 podem ser informadas; quando as quatro colunas de início (6 a 9) ou de "
+                           "término (10 a 13) estiverem preenchidas e salvas, não podem mais ser alteradas. A data da "
+                           "coluna 6 deve ser igual à da coluna 2, e a da coluna 10 não pode ser anterior à da coluna 4. "
+                           "Só é possível cancelar um ATEIE Em análise ou Aprovada. Duplo clique em uma data abre o "
+                           "calendário.",
               bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9), anchor="w", justify="left", wraplength=1100
               ).pack(fill=X, padx=16, pady=(2, 8))
 
@@ -14456,14 +14542,18 @@ class JanelaAteie:
             item = por_ordem.get(indice + 1)
             for posicao, (chave, _, _, _) in enumerate(DOC_LIB_COLUNAS_INTERVENCAO):
                 doc_lib_definir_entrada(self.celulas[indice][posicao], (item or {}).get(chave) or "")
-            self.estado_intervencoes[indice] = {"numero": item["numero"] if item else "",
-                                                "status": item["status"] if item else "", "provisorio": False}
+            self.estado_intervencoes[indice] = {
+                "numero": item["numero"] if item else "", "status": item["status"] if item else "",
+                "provisorio": False,
+                "inicio_travado": bool(item) and all(str(item.get(c) or "").strip() for c in DOC_LIB_CAMPOS_INICIO),
+                "termino_travado": bool(item) and all(str(item.get(c) or "").strip() for c in DOC_LIB_CAMPOS_TERMINO)}
         self._desenhar_numeros()
 
     def _carregar_documento(self, doc):
         """Mostra o ATEIE gravado: travado (versão salva) e, se já foi gerado, no estado EMITIDO (somente as colunas
         6 a 13 editáveis)."""
         self._preencher(doc)
+        self._doc_gravado = doc
         self.emitido = bool(doc.get("emitido"))
         self.salvo = True
         self._aplicar_bloqueios()
@@ -14476,7 +14566,10 @@ class JanelaAteie:
           - novo ou em edição ........ tudo editável
           - salvo (travado) .......... nada editável (Editar libera)
           - EMITIDO (já gerado) ...... dados gerais e colunas 1 a 5 travados para sempre; colunas 6 a 13
-                                       editáveis nos ATEIE já numerados e não cancelados
+                                       editáveis nos ATEIE numerados e não cancelados, até que o grupo de início
+                                       (6 a 9) ou de término (10 a 13) esteja preenchido E salvo: daí em diante
+                                       esse grupo não muda mais
+        As colunas 6 a 13 só existem depois da emissão (antes dela ficam travadas).
         Linha de ATEIE cancelado nunca é editada."""
         geral = self.emitido or self.salvo
         for widget in self._controles:
@@ -14491,10 +14584,12 @@ class JanelaAteie:
             for posicao, entrada in enumerate(entradas):
                 if posicao < quantidade_programadas:                 # colunas 2 a 5
                     bloquear = geral or cancelada
-                elif self.emitido:                                   # colunas 6 a 13 depois da emissão
-                    bloquear = cancelada or not numerada
+                elif not self.emitido:                               # colunas 6 a 13: só depois de emitido
+                    bloquear = True
                 else:
-                    bloquear = self.salvo or cancelada
+                    grupo_salvo = estado["inicio_travado"] if posicao < quantidade_programadas + 4 \
+                        else estado["termino_travado"]
+                    bloquear = cancelada or not numerada or grupo_salvo
                 doc_lib_bloquear_widget(entrada, bloquear)
 
     def _pendente(self):
@@ -14528,11 +14623,12 @@ class JanelaAteie:
     def salvar(self):
         self._limpar_erros()
         dados = doc_lib_normalizar_ateie(self._coletar())
-        erros = doc_lib_validar_ateie(dados)
+        erros = doc_lib_validar_ateie(dados, self._doc_gravado)
         if erros:
             self._mostrar_erros(erros)
             return
         usuario = obter_nome_usuario_logado()
+        travas_antes = {i: (e["inicio_travado"], e["termino_travado"]) for i, e in enumerate(self.estado_intervencoes)}
         provisorios = {i: e["numero"] for i, e in enumerate(self.estado_intervencoes) if e["provisorio"]}
         status_antes = {i: e["status"] for i, e in enumerate(self.estado_intervencoes) if e["numero"]}
         ja_emitido = self.emitido
@@ -14542,7 +14638,10 @@ class JanelaAteie:
             messagebox.showwarning("Documento alterado", str(erro), parent=self.janela)
             return
         except DocLibBloqueado as erro:
-            messagebox.showwarning("ATEIE emitido", str(erro), parent=self.janela)
+            messagebox.showwarning("Alteração não permitida", str(erro), parent=self.janela)
+            return
+        except DocLibRegra as erro:
+            messagebox.showwarning("Regra do ATEIE", str(erro), parent=self.janela)
             return
         except (sqlite3.Error, OSError) as erro:
             messagebox.showerror("Erro", f"Não foi possível salvar o ATEIE: {erro}", parent=self.janela)
@@ -14557,6 +14656,14 @@ class JanelaAteie:
                         if self.estado_intervencoes[i]["status"] != status_antes[i]]
             if mudancas:
                 mensagem += "\n\nStatus atualizado:\n" + "\n".join(mudancas)
+            travados = []
+            for i, estado in enumerate(self.estado_intervencoes):
+                if estado["inicio_travado"] and not travas_antes[i][0]:
+                    travados.append(f"{estado['numero']}: início efetivo (colunas 6 a 9)")
+                if estado["termino_travado"] and not travas_antes[i][1]:
+                    travados.append(f"{estado['numero']}: término efetivo (colunas 10 a 13)")
+            if travados:
+                mensagem += "\n\nRegistrados e bloqueados (não podem mais ser alterados):\n" + "\n".join(travados)
         else:
             numeros = ", ".join(item["numero"] for item in doc["intervencoes"] if item.get("numero"))
             mensagem = f"ATEIE salvo com sucesso!\n\nIntervenção(ões): {numeros}\nStatus: {STATUS_ATEIE_EM_ANALISE}"
@@ -14594,7 +14701,7 @@ class JanelaAteie:
                                    "Feche-o e abra-o novamente (Abrir ATEIE salvo) antes de gerar o documento.",
                                    parent=self.janela)
             return
-        erros = doc_lib_validar_ateie(doc)
+        erros = doc_lib_validar_ateie(doc, doc)
         if erros:
             messagebox.showwarning("Campos obrigatórios",
                                    "O documento salvo possui pendências e não pode ser gerado:\n\n"
@@ -14867,17 +14974,20 @@ BANCO_USUARIOS = "dados_turno.db"
 
 # user.name -> nome completo. Carga inicial: só preenche cadastros que ainda não têm nome completo
 # (o que o administrador digitar depois nunca é sobrescrito).
+# O usuário "admin" fica sem nome completo de propósito.
 NOMES_COMPLETOS_PADRAO = {
     "jfmjunior": "José Flavio Medeiros Jr",
     "lcampos": "Leonardo S. S. Campos",
     "evmorais": "Evandro Vicente Morais",
     "gsantiago": "Gilson Santiago",
-    "galves": "Gabriel P. Alves",
+    "gpalves": "Gabriel P. Alves",
+    "garaujo": "Giovanni Araújo",
+    "ltheodoro": "Luiz G. Theodoro",
     "pbiondi": "Pedro H. G. Biondi",
     "rdavid": "Rafael David de Paula",
     "bfribeiro": "Brendon F. Ribeiro",
     "rcrangel": "Ramon Cesar Rangel",
-    "rcaldeira": "Ademir Caldeira",
+    "acaldeira": "Ademir Caldeira",
     "fsilva": "Fabiano Silva",
     "fjunqueira": "Fernando M. Junqueira",
     "ebenati": "Everton Benati",
