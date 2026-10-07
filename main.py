@@ -1,4 +1,4 @@
-# Código atualizado em 06-10-26 – 23:00h - (Click25: ajustes do ATEIE - status, emissão e nome completo)
+# Código atualizado em 07-10-26 – 00:45h - (Click25: ATEIE - empresas, De acordo, Aprovado para Execução e lista com quebra de texto)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -11986,7 +11986,13 @@ PASTA_ARQUIVO_DOC_LIB = PASTA_ARQUIVO_DOC_LIB_LOCAL
 
 LOGO_ATEIE = os.path.join(PASTA_BASE, "logo_ateie.png")
 
-DOC_LIB_EMPRESAS_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "ENERGISA", "CTEEP", "CBA", "EQUATORIAL", "OUTRA"]
+# Empresas do ATEIE: duas listas independentes (hoje com os mesmos nomes), porque as empresas que solicitam o ATEIE
+# são diferentes das empresas que recebem a notificação. Para alterar uma lista basta editá-la aqui, sem mexer na
+# outra; "OUTRA" deve continuar como última opção (ela libera o campo para digitar o nome da empresa).
+DOC_LIB_EMPRESAS_SOLICITANTES_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "ENERGISA", "CTEEP", "CBA", "EQUATORIAL",
+                                       "OUTRA"]        # combobox "Empresa Solicitante"
+DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "ENERGISA", "CTEEP", "CBA", "EQUATORIAL",
+                                      "OUTRA"]         # combobox "Empresa" de "Pessoal Notificado"
 DOC_LIB_CLASSIFICACOES_ATEIE = ["Programado", "Urgência"]
 DOC_LIB_LIMITE_NOTIFICACOES = 3        # linhas de "De acordo" (Pessoas/Áreas notificadas)
 DOC_LIB_LIMITE_PESSOAL = 3             # linhas de "Pessoal Notificado"
@@ -11996,15 +12002,17 @@ DOC_LIB_LINHAS_INTERVENCOES = 10       # intervenções por documento ATEIE
 # próprio, calculado automaticamente por doc_lib_calcular_status e gravado na intervenção.
 STATUS_ATEIE_EM_ANALISE = "Em análise"
 STATUS_ATEIE_APROVADA = "Aprovada"
+STATUS_ATEIE_APROVADO_EXECUCAO = "Aprovado para Execução"
 STATUS_ATEIE_EM_EXECUCAO = "Em Execução"
 STATUS_ATEIE_CONCLUIDO = "Concluído"
 # ATEIE cancelado mantém o número (nunca reaproveitado) e fica registrado no documento
 STATUS_ATEIE_CANCELADO = "Cancelado"
-DOC_LIB_STATUS_ATEIE = [STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_EM_EXECUCAO,
-                        STATUS_ATEIE_CONCLUIDO, STATUS_ATEIE_CANCELADO]
-# Só é possível cancelar um ATEIE "Em análise" ou "Aprovada": depois que entra em execução, o ATEIE somente
-# pode ser concluído (procedimento); concluído e cancelado também não podem ser cancelados
-DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA)
+DOC_LIB_STATUS_ATEIE = [STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_APROVADO_EXECUCAO,
+                        STATUS_ATEIE_EM_EXECUCAO, STATUS_ATEIE_CONCLUIDO, STATUS_ATEIE_CANCELADO]
+# Só é possível cancelar um ATEIE antes de entrar em execução ("Em análise", "Aprovada" ou "Aprovado para
+# Execução"): em execução o ATEIE somente pode ser concluído (procedimento); concluído e cancelado também não
+# podem ser cancelados
+DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_APROVADO_EXECUCAO)
 
 # Colunas 2 a 13 da tabela de intervenções: (campo no banco, cabeçalho, descrição, tipo)
 DOC_LIB_COLUNAS_INTERVENCAO = [
@@ -12037,7 +12045,7 @@ _DOC_LIB_DESCRICAO_CAMPO = {chave: descricao for chave, _, descricao, _ in DOC_L
 
 # Colunas dos blocos "De acordo" e "Pessoal Notificado": (campo, rótulo, tipo)
 DOC_LIB_COLUNAS_NOTIFICACAO = [("nome", "Nome", "texto"), ("data", "Data", "data"), ("hora", "Hora", "hora")]
-# tipo "empresa": Combobox com DOC_LIB_EMPRESAS_ATEIE e, na opção OUTRA, campo para digitar o nome da empresa
+# tipo "empresa": Combobox com DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE e, na opção OUTRA, campo para digitar o nome
 DOC_LIB_COLUNAS_PESSOAL = [("nome", "Nome", "texto"), ("empresa", "Empresa", "empresa"), ("setor", "Setor", "texto"),
                            ("data", "Data", "data"), ("hora", "Hora", "hora")]
 
@@ -12243,8 +12251,13 @@ def _doc_lib_migrar_dados():
                            "LIMIT 1").fetchone()
             or cur.execute("SELECT 1 FROM doclib_ateie WHERE emitido = 0 AND id IN "
                            "(SELECT ateie_id FROM doclib_ateie_pdfs) LIMIT 1").fetchone()
-            or any((empresa or "").strip() and empresa not in DOC_LIB_EMPRESAS_ATEIE
+            or any((empresa or "").strip() and empresa not in DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE
                    for (empresa,) in cur.execute("SELECT empresa FROM doclib_ateie_pessoal").fetchall())
+            or cur.execute("SELECT 1 FROM doclib_ateie_intervencoes i JOIN doclib_ateie a ON a.id = i.ateie_id "
+                           "WHERE a.emitido = 1 AND i.status = 'Aprovada' AND EXISTS (SELECT 1 FROM "
+                           "doclib_ateie_notificacoes n WHERE n.ateie_id = a.id AND TRIM(COALESCE(n.nome, '')) <> '' "
+                           "AND TRIM(COALESCE(n.data, '')) <> '' AND TRIM(COALESCE(n.hora, '')) <> '') "
+                           "LIMIT 1").fetchone()
             or any(solicitado_por == login and nomes.get((login or "").lower())
                    for solicitado_por, login in cur.execute(
                        "SELECT solicitado_por, solicitado_por_usuario FROM doclib_ateie").fetchall()))
@@ -12272,9 +12285,9 @@ def _doc_lib_migrar_dados():
         cursor.execute("SELECT id, empresa FROM doclib_ateie_pessoal")
         for pessoal_id, empresa in cursor.fetchall():
             empresa = (empresa or "").strip()
-            if not empresa or empresa in DOC_LIB_EMPRESAS_ATEIE:
+            if not empresa or empresa in DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE:
                 continue
-            igual = next((e for e in DOC_LIB_EMPRESAS_ATEIE[:-1] if e.lower() == empresa.lower()), None)
+            igual = next((e for e in DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE[:-1] if e.lower() == empresa.lower()), None)
             if igual:
                 cursor.execute("UPDATE doclib_ateie_pessoal SET empresa = ? WHERE id = ?", (igual, pessoal_id))
             else:
@@ -12289,6 +12302,10 @@ def _doc_lib_migrar_dados():
             item["status"] = STATUS_ATEIE_CANCELADO if item["status"] == "CANCELADA" else ""
             cursor.execute("UPDATE doclib_ateie_intervencoes SET status = ? WHERE id = ?",
                            (doc_lib_calcular_status(item, bool(item["emitido"])), item["id"]))
+        # "De acordo" já preenchido em documento emitido: Aprovada passa a Aprovado para Execução
+        cursor.execute("SELECT id FROM doclib_ateie WHERE emitido = 1")
+        for (ateie_id,) in cursor.fetchall():
+            _doc_lib_recalcular_status(cursor, ateie_id, True)
         cursor.execute("COMMIT")
     except Exception:
         if conexao.in_transaction:
@@ -12298,13 +12315,21 @@ def _doc_lib_migrar_dados():
         conexao.close()
 
 
-def doc_lib_calcular_status(item, emitido):
+def doc_lib_de_acordo_completo(notificacoes):
+    """"De acordo" preenchido na totalidade: pelo menos uma linha e toda linha com conteúdo tem nome, data e hora."""
+    chaves = ("nome", "data", "hora")
+    linhas = [linha for linha in notificacoes or [] if any(str(linha.get(c) or "").strip() for c in chaves)]
+    return bool(linhas) and all(all(str(linha.get(c) or "").strip() for c in chaves) for linha in linhas)
+
+
+def doc_lib_calcular_status(item, emitido, de_acordo=False):
     """Status automático de um ATEIE (uma intervenção), em função do que já aconteceu com ele:
-      Cancelado ........ foi cancelado (nunca volta atrás)
-      Em análise ....... salvo, mas o documento ainda não foi gerado
-      Concluído ........ documento gerado e colunas 10 a 13 (término efetivo) todas preenchidas
-      Em Execução ...... documento gerado e colunas 6 a 9 (início efetivo) todas preenchidas
-      Aprovada ......... documento gerado (ainda sem execução)
+      Cancelado ................ foi cancelado (nunca volta atrás)
+      Em análise ............... salvo, mas o documento ainda não foi gerado
+      Concluído ................ documento gerado e colunas 10 a 13 (término efetivo) todas preenchidas
+      Em Execução .............. documento gerado e colunas 6 a 9 (início efetivo) todas preenchidas
+      Aprovado para Execução ... documento gerado e "De acordo" preenchido (nome, data e hora)
+      Aprovada ................. documento gerado, ainda sem o "De acordo"
     Preenchimento parcial das colunas 6 a 9 ou 10 a 13 não muda o status."""
     if item.get("status") == STATUS_ATEIE_CANCELADO:
         return STATUS_ATEIE_CANCELADO
@@ -12318,16 +12343,18 @@ def doc_lib_calcular_status(item, emitido):
         return STATUS_ATEIE_CONCLUIDO
     if completo(DOC_LIB_CAMPOS_INICIO):
         return STATUS_ATEIE_EM_EXECUCAO
-    return STATUS_ATEIE_APROVADA
+    return STATUS_ATEIE_APROVADO_EXECUCAO if de_acordo else STATUS_ATEIE_APROVADA
 
 
 def _doc_lib_recalcular_status(cursor, ateie_id, emitido):
     """Recalcula e grava o status de cada ATEIE (intervenção) do documento, um a um."""
+    cursor.execute("SELECT nome, data, hora FROM doclib_ateie_notificacoes WHERE ateie_id = ?", (ateie_id,))
+    de_acordo = doc_lib_de_acordo_completo([{"nome": n, "data": d, "hora": h} for n, d, h in cursor.fetchall()])
     cursor.execute(f"SELECT id, status, {', '.join(DOC_LIB_CAMPOS_EXECUCAO)} FROM doclib_ateie_intervencoes "
                    f"WHERE ateie_id = ?", (ateie_id,))
     for linha in cursor.fetchall():
         item = dict(zip(["id", "status"] + list(DOC_LIB_CAMPOS_EXECUCAO), linha))
-        novo = doc_lib_calcular_status(item, emitido)
+        novo = doc_lib_calcular_status(item, emitido, de_acordo)
         if novo != item["status"]:
             cursor.execute("UPDATE doclib_ateie_intervencoes SET status = ? WHERE id = ?", (novo, item["id"]))
 
@@ -12399,9 +12426,10 @@ def doc_lib_erros_datas_execucao(item, gravado=None):
 def doc_lib_diferencas_bloqueadas(atual, dados, emitido=True):
     """Lista o que, nos dados recebidos, difere do gravado e NÃO pode ser alterado.
 
-    ATEIE já EMITIDO (documento gerado): dados gerais, De acordo, Pessoal Notificado e colunas 1 a 5 de cada ATEIE
-    ficam protegidos; além disso, quando as quatro colunas de início efetivo (6 a 9) ou as quatro de término efetivo
-    (10 a 13) já estão preenchidas e salvas, esse grupo não pode mais ser alterado.
+    ATEIE já EMITIDO (documento gerado): dados gerais, Pessoal Notificado e colunas 1 a 5 de cada ATEIE ficam
+    protegidos. O "De acordo" só recebe linhas novas (as já registradas não mudam). As colunas 6 a 13 só podem ser
+    alteradas depois que o "De acordo" já estiver preenchido e salvo e, quando as quatro colunas de início efetivo
+    (6 a 9) ou as quatro de término efetivo (10 a 13) já estão preenchidas e salvas, esse grupo não muda mais.
     ATEIE ainda NÃO emitido: as colunas 6 a 13 (execução) não podem ser informadas antes da geração do documento.
     Lista vazia = nada protegido foi alterado."""
     def texto(valor):
@@ -12429,9 +12457,14 @@ def doc_lib_diferencas_bloqueadas(atual, dados, emitido=True):
         return [{chave: texto(linha.get(chave)) for chave in chaves} for linha in linhas
                 if any(texto(linha.get(chave)) for chave in chaves)]
 
-    if linhas_nao_vazias(atual.get("notificacoes") or [], ("nome", "data", "hora")) \
-            != linhas_nao_vazias(dados.get("notificacoes") or [], ("nome", "data", "hora")):
-        diferencas.append("De acordo (Pessoas/Áreas notificadas)")
+    fixas = linhas_nao_vazias(atual.get("notificacoes") or [], ("nome", "data", "hora"))
+    novas = linhas_nao_vazias(dados.get("notificacoes") or [], ("nome", "data", "hora"))
+    if novas[:len(fixas)] != fixas:
+        diferencas.append("De acordo (as linhas já registradas não podem ser alteradas)")
+    elif len(novas) > DOC_LIB_LIMITE_NOTIFICACOES or not all(all(linha.values()) for linha in novas[len(fixas):]):
+        diferencas.append(f"De acordo (cada linha nova precisa de nome, data e hora, no máximo "
+                          f"{DOC_LIB_LIMITE_NOTIFICACOES} linhas)")
+    de_acordo_gravado = doc_lib_de_acordo_completo(atual.get("notificacoes"))
     chaves_pessoal = ("nome", "empresa", "empresa_outra", "setor", "data", "hora")
     if linhas_nao_vazias(atual.get("pessoal") or [], chaves_pessoal) \
             != linhas_nao_vazias(dados.get("pessoal") or [], chaves_pessoal):
@@ -12448,6 +12481,10 @@ def doc_lib_diferencas_bloqueadas(atual, dados, emitido=True):
             diferencas.append(f"Linha {ordem} ({gravada['numero']}): colunas 1 a 5 (número e programação)")
         if gravada.get("status") == STATUS_ATEIE_CANCELADO:
             continue
+        if not de_acordo_gravado and any(texto(gravada.get(chave)) != texto(item.get(chave))
+                                         for chave in DOC_LIB_CAMPOS_EXECUCAO):
+            diferencas.append(f"Linha {ordem} ({gravada['numero']}): as colunas 6 a 13 só podem ser informadas "
+                              f"depois que o De acordo estiver preenchido e salvo")
         for chaves, colunas, nome in ((DOC_LIB_CAMPOS_INICIO, "6 a 9", "início efetivo"),
                                       (DOC_LIB_CAMPOS_TERMINO, "10 a 13", "término efetivo")):
             if all(texto(gravada.get(chave)) for chave in chaves) \
@@ -12466,6 +12503,8 @@ def doc_lib_salvar_ateie(dados, usuario):
     - Documento já EMITIDO (gerado): dados gerais, De acordo, Pessoal Notificado e colunas 1 a 5 ficam
       protegidos, e o grupo de início (6 a 9) ou de término (10 a 13) já preenchido e salvo não muda mais
       (DocLibBloqueado se houver tentativa); só o restante das colunas 6 a 13 é gravado.
+    - Depois da emissão o "De acordo" só recebe linhas novas, e as colunas 6 a 13 só são aceitas depois que o
+      "De acordo" estiver preenchido e salvo (DocLibBloqueado).
     - Antes da emissão as colunas 6 a 13 não podem ser informadas (DocLibBloqueado).
     - Datas da execução: coluna 6 igual à coluna 2; coluna 10 não anterior à coluna 4 (DocLibRegra).
     - O status de cada ATEIE é recalculado a cada gravação (doc_lib_calcular_status).
@@ -12493,9 +12532,10 @@ def doc_lib_salvar_ateie(dados, usuario):
         bloqueadas = doc_lib_diferencas_bloqueadas(atual or {}, dados, emitido)
         if bloqueadas:
             if emitido:
-                cabecalho = ("Este ATEIE já foi emitido (documento gerado). Somente as colunas 6 a 13 da tabela de "
-                             "intervenções podem ser alteradas, e o início efetivo (6 a 9) ou o término efetivo "
-                             "(10 a 13) já salvo não muda mais.")
+                cabecalho = ("Este ATEIE já foi emitido (documento gerado). Só podem ser alterados: o De acordo "
+                             "(novas linhas) e as colunas 6 a 13 da tabela de intervenções (depois que o De acordo "
+                             "estiver preenchido e salvo); o início efetivo (6 a 9) ou o término efetivo (10 a 13) "
+                             "já salvo não muda mais.")
             else:
                 cabecalho = "Dados de execução não são aceitos antes da geração do documento."
             raise DocLibBloqueado(cabecalho + "\n\nAlterações recusadas: " + "; ".join(bloqueadas) + ".")
@@ -12529,7 +12569,15 @@ def doc_lib_salvar_ateie(dados, usuario):
                 cursor.execute("DELETE FROM doclib_ateie_notificacoes WHERE ateie_id = ?", (ateie_id,))
                 cursor.execute("DELETE FROM doclib_ateie_pessoal WHERE ateie_id = ?", (ateie_id,))
 
-        if not emitido:
+        if emitido:
+            # depois da emissão o "De acordo" só ganha linhas novas (as já gravadas foram verificadas acima)
+            gravadas_de_acordo = len(atual["notificacoes"])
+            novas = [linha for linha in dados["notificacoes"]
+                     if any(str(linha.get(chave) or "").strip() for chave in ("nome", "data", "hora"))]
+            for ordem, linha in enumerate(novas[gravadas_de_acordo:], start=gravadas_de_acordo + 1):
+                cursor.execute("INSERT INTO doclib_ateie_notificacoes (ateie_id, ordem, nome, data, hora) "
+                               "VALUES (?, ?, ?, ?, ?)", (ateie_id, ordem, linha["nome"], linha["data"], linha["hora"]))
+        else:
             # "De acordo" é opcional: só são gravadas as linhas com algum conteúdo
             ordem = 0
             for linha in dados["notificacoes"]:
@@ -12614,18 +12662,18 @@ def doc_lib_listar_ateie():
     try:
         cursor.execute(
             "SELECT i.ateie_id, i.ordem, i.numero, i.ano, i.sequencia, i.status, a.equipamento, a.empresa, "
-            "a.empresa_outra, a.local_servico, a.servicos, a.solicitado_por, a.data_preenchimento, "
-            "a.hora_preenchimento FROM doclib_ateie_intervencoes i JOIN doclib_ateie a ON a.id = i.ateie_id "
-            "ORDER BY i.ano DESC, i.sequencia DESC")
+            "a.empresa_outra, a.local_servico, a.servicos, a.solicitado_por, i.prev_data_inicio, "
+            "i.prev_hora_inicio, i.prev_data_termino, i.prev_hora_termino FROM doclib_ateie_intervencoes i "
+            "JOIN doclib_ateie a ON a.id = i.ateie_id ORDER BY i.ano DESC, i.sequencia DESC")
         resultado = []
         for (ateie_id, ordem, numero, ano, sequencia, status, equipamento, empresa, empresa_outra, local,
-             servicos, solicitado_por, data, hora) in cursor.fetchall():
+             servicos, solicitado_por, data_inicio, hora_inicio, data_termino, hora_termino) in cursor.fetchall():
             resultado.append({
                 "ateie_id": ateie_id, "ordem": ordem, "numero": numero, "ano": ano, "sequencia": sequencia,
                 "status": status, "equipamento": equipamento or "",
                 "empresa": empresa_outra if empresa == "OUTRA" and empresa_outra else empresa,
-                "solicitante": solicitado_por, "data": f"{data} {hora}", "local": local or "",
-                "servicos": servicos or "",
+                "solicitante": solicitado_por, "prog_inicio": f"{data_inicio} {hora_inicio}",
+                "prog_termino": f"{data_termino} {hora_termino}", "local": local or "", "servicos": servicos or "",
             })
         return resultado
     finally:
@@ -12765,13 +12813,9 @@ def doc_lib_validar_ateie(dados, atual=None):
                 if tipo == "hora" and not doc_lib_normalizar_hora(valor):
                     erros.append(((f"{prefixo}:{numero_linha}:{chave}",),
                                   f"{titulo}, linha {numero_linha}: Hora inválida (use HH:MM)."))
-                if tipo == "empresa":
-                    if valor not in DOC_LIB_EMPRESAS_ATEIE:
-                        erros.append(((f"{prefixo}:{numero_linha}:{chave}",),
-                                      f"{titulo}, linha {numero_linha}: selecione a Empresa na lista."))
-                    elif valor == "OUTRA" and vazio(linha.get(chave + "_outra")):
-                        erros.append(((f"{prefixo}:{numero_linha}:{chave}_outra",),
-                                      f"{titulo}, linha {numero_linha}: informe o nome da empresa (OUTRA)."))
+                if tipo == "empresa" and valor == "OUTRA" and vazio(linha.get(chave + "_outra")):
+                    erros.append(((f"{prefixo}:{numero_linha}:{chave}_outra",),
+                                  f"{titulo}, linha {numero_linha}: informe o nome da empresa (OUTRA)."))
 
     validar_linhas(dados.get("notificacoes") or [], DOC_LIB_COLUNAS_NOTIFICACAO, "notif",
                    "De acordo (Pessoas/Áreas notificadas)", opcional=True)
@@ -13342,7 +13386,7 @@ def doc_lib_imprimir_pdf(caminho):
 # ---------------------------------------------------
 # Cor do texto de cada status do ATEIE (mesma paleta do SGA)
 DOC_LIB_COR_STATUS = {STATUS_ATEIE_EM_ANALISE: "#CC8400", STATUS_ATEIE_APROVADA: SGA_AZUL,
-                      STATUS_ATEIE_EM_EXECUCAO: "#5E35B1", STATUS_ATEIE_CONCLUIDO: SGA_VERDE,
+                      STATUS_ATEIE_APROVADO_EXECUCAO: "#0E7490", STATUS_ATEIE_EM_EXECUCAO: "#5E35B1", STATUS_ATEIE_CONCLUIDO: SGA_VERDE,
                       STATUS_ATEIE_CANCELADO: SGA_VERMELHO}
 DOC_LIB_COR_BLOQUEADO = "#EEF1F6"
 DOC_LIB_COR_DESABILITADO = "#E3E8EF"
@@ -13468,16 +13512,17 @@ def doc_lib_selecionar_data(parent, entrada, ano_curto=False, ao_selecionar=None
         pass
 
 
-# Colunas da janela "Abrir ATEIE salvo": (campo, título, largura, estica com a janela)
+# Colunas da janela "Abrir ATEIE salvo": (campo, título, largura em pixels, exibir sempre em caixa alta)
 DOC_LIB_COLUNAS_LISTA = [
     ("numero", "N° ATEIE", 105, False),
-    ("equipamento", "Equipamento de Interligação", 250, True),
-    ("empresa", "Empresa", 130, False),
-    ("solicitante", "Solicitado por", 165, False),
-    ("data", "Preenchido em", 150, False),
-    ("local", "Local", 170, True),
-    ("servicos", "Serviços a Executar", 235, True),
-    ("status", "Status", 120, False),
+    ("equipamento", "Equipamento de Interligação", 185, True),
+    ("empresa", "Empresa", 115, True),
+    ("solicitante", "Solicitado por", 150, False),
+    ("prog_inicio", "Programação Início", 135, False),
+    ("prog_termino", "Programação Término", 135, False),
+    ("local", "Local", 140, True),
+    ("servicos", "Serviços a Executar", 205, False),
+    ("status", "Status", 160, False),
 ]
 
 
@@ -13485,9 +13530,181 @@ def _doc_lib_uma_linha(texto):
     return " ".join(str(texto or "").split())
 
 
+class TabelaQuebraDocLib(Frame):
+    """Tabela em que o texto de cada célula QUEBRA em várias linhas quando é maior que a largura da coluna (a
+    altura da linha acompanha a célula mais alta). Cabeçalho clicável (usado nos filtros), barras de rolagem
+    vertical e horizontal, seleção por clique e duplo clique para abrir."""
+
+    ALTURA_CABECALHO = 40
+    ALTURA_MINIMA = 28
+    MARGEM = 8
+    COR_SELECAO = "#DCE8F8"
+
+    def __init__(self, pai, colunas, ao_clicar_titulo=None, ao_abrir=None):
+        Frame.__init__(self, pai, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
+        self.colunas = [(chave, titulo, largura) for chave, titulo, largura in colunas]
+        self.ao_clicar_titulo = ao_clicar_titulo
+        self.ao_abrir = ao_abrir
+        self.titulos = {chave: titulo for chave, titulo, _ in self.colunas}
+        self.x0, total = [], 0
+        for _, _, largura in self.colunas:
+            self.x0.append(total)
+            total += largura
+        self.largura_total = total
+        self.registros = []
+        self.faixas = []                 # (y_inicial, y_final, retângulo de fundo, cor de fundo) de cada linha
+        self.selecionado = None
+
+        self.cabecalho = Canvas(self, height=self.ALTURA_CABECALHO, bg=SGA_AZUL, highlightthickness=0,
+                                cursor="hand2")
+        self.corpo = Canvas(self, bg="white", highlightthickness=0, yscrollincrement=28, xscrollincrement=40,
+                            takefocus=1)
+        self.barra_v = Scrollbar(self, orient=VERTICAL, command=self.corpo.yview)
+        self.barra_h = Scrollbar(self, orient=HORIZONTAL, command=self._rolar_x)
+        self.cabecalho.grid(row=0, column=0, sticky="ew")
+        self.corpo.grid(row=1, column=0, sticky="nsew")
+        self.barra_v.grid(row=1, column=1, sticky="ns")
+        self.barra_h.grid(row=2, column=0, sticky="ew")
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.corpo.configure(yscrollcommand=self.barra_v.set, xscrollcommand=self._ao_rolar_x)
+        self.cabecalho.configure(scrollregion=(0, 0, self.largura_total, self.ALTURA_CABECALHO))
+        self.itens_titulo = {}
+        self._desenhar_cabecalho()
+
+        self.cabecalho.bind("<Button-1>", self._clicar_cabecalho)
+        self.corpo.bind("<Button-1>", self._clicar)
+        self.corpo.bind("<Double-Button-1>", self._duplo)
+        self.corpo.bind("<Up>", lambda e: self.selecionar((self.selecionado or 0) - 1 if self.selecionado else 0))
+        self.corpo.bind("<Down>", lambda e: self.selecionar(0 if self.selecionado is None else self.selecionado + 1))
+        self.corpo.bind("<Return>", lambda e: self._abrir_selecionado())
+        for widget in (self.corpo, self.cabecalho):
+            widget.bind("<MouseWheel>", self._roda)
+            widget.bind("<Shift-MouseWheel>", self._roda_horizontal)
+
+    # ---- cabeçalho -------------------------------------------------------------------------------------------
+    def _desenhar_cabecalho(self):
+        self.cabecalho.delete("all")
+        for (chave, _, largura), x in zip(self.colunas, self.x0):
+            self.cabecalho.create_rectangle(x, 0, x + largura, self.ALTURA_CABECALHO, fill=SGA_AZUL, outline="#2F5F9E")
+            self.itens_titulo[chave] = self.cabecalho.create_text(
+                x + self.MARGEM, self.ALTURA_CABECALHO / 2, text=self.titulos[chave], anchor="w",
+                width=largura - 2 * self.MARGEM, fill="white", font=(SGA_FONTE, 10, "bold"))
+
+    def titulo(self, chave):
+        return self.titulos[chave]
+
+    def definir_titulo(self, chave, texto):
+        self.titulos[chave] = texto
+        self.cabecalho.itemconfigure(self.itens_titulo[chave], text=texto)
+
+    def x_coluna(self, chave):
+        return self.x0[[c[0] for c in self.colunas].index(chave)]
+
+    def deslocamento_x(self):
+        return int(self.corpo.canvasx(0))
+
+    def _clicar_cabecalho(self, evento):
+        x = self.cabecalho.canvasx(evento.x)
+        for (chave, _, largura), x0 in zip(self.colunas, self.x0):
+            if x0 <= x < x0 + largura:
+                if self.ao_clicar_titulo:
+                    self.ao_clicar_titulo(chave)
+                return
+
+    # ---- conteúdo --------------------------------------------------------------------------------------------
+    def preencher(self, registros):
+        """registros: [{'valores': [textos na ordem das colunas], 'cor': cor do texto, 'dados': qualquer objeto}]."""
+        self.registros = list(registros)
+        self.selecionado = None
+        corpo = self.corpo
+        corpo.delete("all")
+        self.faixas = []
+        y = 0
+        for indice, registro in enumerate(self.registros):
+            altura = self.ALTURA_MINIMA
+            for (chave, _, largura), x, texto in zip(self.colunas, self.x0, registro["valores"]):
+                item = corpo.create_text(x + self.MARGEM, y + 6, text=texto, anchor="nw",
+                                         width=max(largura - 2 * self.MARGEM, 20), font=(SGA_FONTE, 10),
+                                         fill=registro.get("cor", SGA_TEXTO))
+                caixa = corpo.bbox(item)
+                if caixa:
+                    altura = max(altura, caixa[3] - y + 6)
+            fundo = "#FFFFFF" if indice % 2 == 0 else "#F6F8FB"
+            retangulo = corpo.create_rectangle(0, y, self.largura_total, y + altura, fill=fundo, outline="")
+            corpo.tag_lower(retangulo)
+            corpo.create_line(0, y + altura, self.largura_total, y + altura, fill="#E5EAF1")
+            self.faixas.append((y, y + altura, retangulo, fundo))
+            y += altura
+        for x in self.x0[1:]:
+            corpo.create_line(x, 0, x, y, fill="#E5EAF1")
+        corpo.configure(scrollregion=(0, 0, self.largura_total, max(y, 1)))
+        corpo.yview_moveto(0)
+
+    def linhas(self):
+        """Textos exibidos em cada linha (na ordem das colunas)."""
+        return [registro["valores"] for registro in self.registros]
+
+    def alturas_linhas(self):
+        return [fim - inicio for inicio, fim, _, _ in self.faixas]
+
+    # ---- seleção e rolagem -----------------------------------------------------------------------------------
+    def selecionar(self, indice):
+        if self.selecionado is not None and self.selecionado < len(self.faixas):
+            self.corpo.itemconfigure(self.faixas[self.selecionado][2], fill=self.faixas[self.selecionado][3])
+        self.selecionado = indice if indice is not None and 0 <= indice < len(self.faixas) else None
+        if self.selecionado is not None:
+            inicio, fim, retangulo, _ = self.faixas[self.selecionado]
+            self.corpo.itemconfigure(retangulo, fill=self.COR_SELECAO)
+            self._mostrar(inicio, fim)
+
+    def _mostrar(self, inicio, fim):
+        total = max(self.faixas[-1][1], 1)
+        topo = self.corpo.canvasy(0)
+        visivel = max(self.corpo.winfo_height(), 1)
+        if inicio < topo:
+            self.corpo.yview_moveto(inicio / total)
+        elif fim > topo + visivel:
+            self.corpo.yview_moveto((fim - visivel) / total)
+
+    def dados_selecionado(self):
+        if self.selecionado is None:
+            return None
+        return self.registros[self.selecionado].get("dados")
+
+    def _clicar(self, evento):
+        self.corpo.focus_set()
+        y = self.corpo.canvasy(evento.y)
+        self.selecionar(next((i for i, (inicio, fim, _, _) in enumerate(self.faixas) if inicio <= y < fim), None))
+
+    def _duplo(self, evento):
+        self._clicar(evento)
+        self._abrir_selecionado()
+
+    def _abrir_selecionado(self):
+        if self.selecionado is not None and self.ao_abrir:
+            self.ao_abrir()
+
+    def _ao_rolar_x(self, inicio, fim):
+        self.barra_h.set(inicio, fim)
+        self.cabecalho.xview_moveto(inicio)
+
+    def _rolar_x(self, *args):
+        self.corpo.xview(*args)
+        self.cabecalho.xview(*args)
+
+    def _roda(self, evento):
+        self.corpo.yview_scroll(int(-1 * (evento.delta / 120)), "units")
+
+    def _roda_horizontal(self, evento):
+        self._rolar_x("scroll", int(-1 * (evento.delta / 120)), "units")
+
+
 class JanelaListaAteie:
     """Janela "Abrir ATEIE salvo": UMA linha por ATEIE (número), com busca livre e filtros por coluna que
-    podem ser combinados (clique no título da coluna para ver os valores existentes, sem repetição)."""
+    podem ser combinados (clique no título da coluna para ver os valores existentes, sem repetição). O texto de
+    cada coluna quebra em mais de uma linha quando é maior que a largura; Equipamento de Interligação, Empresa e
+    Local aparecem sempre em caixa alta."""
 
     SEM_FILTRO = "(Todos)"
 
@@ -13495,11 +13712,14 @@ class JanelaListaAteie:
         self.parent = parent
         self.resultado = None            # (id do documento, linha da tabela) do ATEIE escolhido
         self.filtros = {}                # campo -> valor selecionado
-        self.ids_por_linha = {}
         self.popup = None
         self.registros = doc_lib_listar_ateie()
         for registro in self.registros:
-            registro["_texto"] = {chave: _doc_lib_uma_linha(registro[chave]) for chave, _, _, _ in DOC_LIB_COLUNAS_LISTA}
+            textos = {}
+            for chave, _, _, maiuscula in DOC_LIB_COLUNAS_LISTA:
+                texto = _doc_lib_uma_linha(registro[chave])
+                textos[chave] = texto.upper() if maiuscula else texto
+            registro["_texto"] = textos
 
         janela = self.janela = Toplevel(parent)
         janela.title("Abrir ATEIE salvo")
@@ -13519,27 +13739,15 @@ class JanelaListaAteie:
         doc_lib_criar_botao(barra_busca, "Limpar filtros", self.limpar_filtros, "neutro"
                             ).pack(side=RIGHT, padx=(10, 0), ipadx=10, fill=Y)
 
-        quadro = Frame(janela, bg=SGA_CARD, highlightthickness=1, highlightbackground=SGA_BORDA)
-        quadro.place(x=24, y=122, relwidth=1.0, width=-48, relheight=1.0, height=-122 - 78)
-        self.arvore = ttk.Treeview(quadro, columns=[c[0] for c in DOC_LIB_COLUNAS_LISTA], show="headings",
-                                   selectmode="browse")
-        for chave, titulo, largura, estica in DOC_LIB_COLUNAS_LISTA:
-            self.arvore.column(chave, width=largura, anchor="w", stretch=estica)
-            self.arvore.heading(chave, text=self.titulo_coluna(chave), anchor="w",
-                                command=lambda c=chave: self.abrir_filtro(c))
-        for status, cor in DOC_LIB_COR_STATUS.items():
-            self.arvore.tag_configure(status, foreground=cor)
-        barra_rolagem = Scrollbar(quadro, orient=VERTICAL, command=self.arvore.yview)
-        self.arvore.configure(yscrollcommand=barra_rolagem.set)
-        barra_rolagem.pack(side=RIGHT, fill=Y)
-        self.arvore.pack(side=LEFT, fill=BOTH, expand=True)
+        self.tabela = TabelaQuebraDocLib(janela, [(c[0], self.titulo_coluna(c[0], c[1]), c[2])
+                                                  for c in DOC_LIB_COLUNAS_LISTA],
+                                         ao_clicar_titulo=self.abrir_filtro, ao_abrir=self.abrir)
+        self.tabela.place(x=24, y=122, relwidth=1.0, width=-48, relheight=1.0, height=-122 - 78)
 
         self.contador = Label(janela, text="", bg=SGA_FUNDO, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9), anchor="w")
         self.contador.place(x=24, rely=1.0, y=-30, anchor="sw")
 
         self.busca_var.trace_add("write", lambda *args: self.aplicar())
-        self.arvore.bind("<Double-Button-1>", self.abrir)
-        self.arvore.bind("<Return>", self.abrir)
         doc_lib_criar_botao(janela, "Abrir", self.abrir, "primario"
                             ).place(relx=0.5, x=-130, rely=1.0, y=-20, anchor="sw", width=120, height=40)
         doc_lib_criar_botao(janela, "Voltar", janela.destroy, "neutro"
@@ -13550,9 +13758,9 @@ class JanelaListaAteie:
     # ---- dados e filtros -------------------------------------------------------------------------------------
     @staticmethod
     def valor_filtro(registro, chave):
-        """Valor do registro usado no filtro da coluna (em 'Preenchido em' filtra-se pela data)."""
+        """Valor do registro usado no filtro da coluna (nas colunas de programação filtra-se pela data)."""
         texto = registro["_texto"][chave]
-        return texto.split(" ")[0] if chave == "data" else texto
+        return texto.split(" ")[0] if chave in ("prog_inicio", "prog_termino") else texto
 
     def valores_distintos(self, chave):
         """Todos os valores existentes na coluna, sem repetição, em ordem útil para escolher."""
@@ -13562,7 +13770,7 @@ class JanelaListaAteie:
             return [status for status in DOC_LIB_STATUS_ATEIE if status in valores]
         if chave == "numero":
             return sorted(valores, key=lambda n: (n.split("/")[-1], n), reverse=True)
-        if chave == "data":
+        if chave in ("prog_inicio", "prog_termino"):
             return sorted(valores, key=lambda d: d.split("/")[::-1], reverse=True)
         return sorted(valores, key=lambda v: v.lower())
 
@@ -13578,22 +13786,19 @@ class JanelaListaAteie:
             visiveis.append(registro)
         return visiveis
 
-    def titulo_coluna(self, chave):
-        titulo = next(c[1] for c in DOC_LIB_COLUNAS_LISTA if c[0] == chave)
+    def titulo_coluna(self, chave, titulo=None):
+        titulo = titulo or next(c[1] for c in DOC_LIB_COLUNAS_LISTA if c[0] == chave)
         return f"● {titulo} ▼" if chave in self.filtros else f"{titulo} ▼"
 
     def aplicar(self):
         """Redesenha a lista conforme os filtros e a busca."""
-        self.arvore.delete(*self.arvore.get_children())
-        self.ids_por_linha.clear()
         visiveis = self.linhas_visiveis()
-        for registro in visiveis:
-            texto = registro["_texto"]
-            item = self.arvore.insert("", END, values=[texto[c[0]] for c in DOC_LIB_COLUNAS_LISTA],
-                                      tags=(registro["status"],))
-            self.ids_por_linha[item] = (registro["ateie_id"], registro["ordem"])
+        self.tabela.preencher([{
+            "valores": [registro["_texto"][c[0]] for c in DOC_LIB_COLUNAS_LISTA],
+            "cor": DOC_LIB_COR_STATUS.get(registro["status"], SGA_TEXTO),
+            "dados": (registro["ateie_id"], registro["ordem"])} for registro in visiveis])
         for chave, _, _, _ in DOC_LIB_COLUNAS_LISTA:
-            self.arvore.heading(chave, text=self.titulo_coluna(chave))
+            self.tabela.definir_titulo(chave, self.titulo_coluna(chave))
         titulos = {c[0]: c[1] for c in DOC_LIB_COLUNAS_LISTA}
         ativos = "; ".join(f"{titulos[chave]} = {valor}" for chave, valor in self.filtros.items())
         self.contador.config(text=f"{len(visiveis)} de {len(self.registros)} ATEIE(s)"
@@ -13618,9 +13823,9 @@ class JanelaListaAteie:
     def abrir_filtro(self, chave):
         self.fechar_filtro()
         valores = self.valores_distintos(chave)
-        colunas = [c[0] for c in DOC_LIB_COLUNAS_LISTA]
-        x = self.arvore.winfo_rootx() + sum(int(self.arvore.column(c, "width")) for c in colunas[:colunas.index(chave)])
-        y = self.arvore.winfo_rooty() + 28
+        x = self.tabela.corpo.winfo_rootx() + self.tabela.x_coluna(chave) - self.tabela.deslocamento_x()
+        x = max(self.tabela.corpo.winfo_rootx(), x)
+        y = self.tabela.cabecalho.winfo_rooty() + self.tabela.ALTURA_CABECALHO
 
         popup = self.popup = Toplevel(self.janela)
         popup.overrideredirect(True)
@@ -13669,8 +13874,8 @@ class JanelaListaAteie:
         busca.trace_add("write", preencher)
         lista.bind("<ButtonRelease-1>", escolher)
         lista.bind("<Return>", escolher)
-        entrada.bind("<Return>", lambda e: (lista.selection_clear(0, END), lista.selection_set(1 if len(self.itens_popup) > 1 else 0),
-                                           escolher()))
+        entrada.bind("<Return>", lambda e: (lista.selection_clear(0, END),
+                                           lista.selection_set(1 if len(self.itens_popup) > 1 else 0), escolher()))
         entrada.bind("<Down>", lambda e: lista.focus_set())
         popup.bind("<Escape>", lambda e: self.fechar_filtro())
         popup.bind("<Button-1>", clique, add="+")
@@ -13695,11 +13900,11 @@ class JanelaListaAteie:
                 pass
 
     def abrir(self, evento=None):
-        selecionado = self.arvore.selection()
-        if not selecionado:
+        escolha = self.tabela.dados_selecionado()
+        if escolha is None:
             messagebox.showwarning("Atenção", "Selecione um ATEIE na lista.", parent=self.janela)
             return
-        self.resultado = self.ids_por_linha[selecionado[0]]
+        self.resultado = escolha
         self.janela.destroy()
 
 
@@ -13770,13 +13975,15 @@ class LinhasDinamicasDocLib:
     Colunas do tipo "empresa" são um Combobox com a lista de empresas do ATEIE; em OUTRA aparece um campo para
     digitar o nome (o mesmo mecanismo de "Empresa Solicitante")."""
 
-    def __init__(self, ateie, pai, colunas, limite):
+    def __init__(self, ateie, pai, colunas, limite, empresas=None):
         self.ateie = ateie
         self.pai = pai
         self.colunas = colunas
         self.limite = limite
+        self.empresas = empresas or DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE    # opções das colunas do tipo "empresa"
         self.linhas = []
-        self.bloqueado = False
+        self.bloqueado = False        # todas as linhas travadas
+        self.fixas = 0                # quantidade de primeiras linhas travadas (já registradas) com o restante livre
 
         for indice, (chave, rotulo, tipo) in enumerate(colunas):
             if tipo == "data":
@@ -13811,7 +14018,7 @@ class LinhasDinamicasDocLib:
                 celula = quadro
             elif tipo == "empresa":
                 celula = Frame(self.pai, bg=SGA_CARD)
-                entrada = ttk.Combobox(celula, values=DOC_LIB_EMPRESAS_ATEIE, state="readonly", width=14,
+                entrada = ttk.Combobox(celula, values=self.empresas, state="readonly", width=14,
                                        font=(SGA_FONTE, 10))
                 entrada.pack(fill=X)
                 entrada.bind("<MouseWheel>", lambda e: (_rolar_area_sga(e), "break")[1])
@@ -13873,7 +14080,8 @@ class LinhasDinamicasDocLib:
             self.ateie.rolar_ate(primeira)
 
     def remover_linha(self, linha):
-        if self.bloqueado or len(self.linhas) <= 1 or linha not in self.linhas:
+        if self.bloqueado or len(self.linhas) <= 1 or linha not in self.linhas \
+                or self.linhas.index(linha) < self.fixas:
             return
         for celula, _ in linha["widgets"]:
             self.ateie.esquecer_marcas(celula)
@@ -13898,7 +14106,7 @@ class LinhasDinamicasDocLib:
                 linha["btn_add"].grid_remove()
             if posicao > 0:
                 linha["btn_rem"].grid(row=grade, column=self.coluna_adicionar + 1, sticky="new", padx=4, pady=3)
-                doc_lib_estado_botao(linha["btn_rem"], not self.bloqueado)
+                doc_lib_estado_botao(linha["btn_rem"], not self.bloqueado and posicao >= self.fixas)
             else:
                 linha["btn_rem"].grid_remove()
 
@@ -13935,15 +14143,19 @@ class LinhasDinamicasDocLib:
                 return linha["outras"][chave[:-6]][1]
         return None
 
-    def travar(self, bloquear):
+    def travar(self, bloquear, fixas=0):
+        """bloquear=True trava todas as linhas. Com bloquear=False, as 'fixas' primeiras linhas (já registradas)
+        ficam travadas e as demais continuam livres, inclusive para novas linhas."""
         self.bloqueado = bloquear
-        for linha in self.linhas:
+        self.fixas = 0 if bloquear else fixas
+        for posicao, linha in enumerate(self.linhas):
+            travada = bloquear or posicao < self.fixas
             for entrada in linha["campos"].values():
-                doc_lib_bloquear_widget(entrada, bloquear)
+                doc_lib_bloquear_widget(entrada, travada)
             for _, outra in linha["outras"].values():
-                doc_lib_bloquear_widget(outra, bloquear)
+                doc_lib_bloquear_widget(outra, travada)
             for icone in linha["icones"]:
-                icone.definir_habilitado(not bloquear)
+                icone.definir_habilitado(not travada)
         self._reorganizar()
 
 
@@ -14053,7 +14265,7 @@ class JanelaAteie:
         # 3. Empresa Solicitante (+ nome manual quando OUTRA)
         rot = self._rotulo("Empresa Solicitante")
         quadro = Frame(card, bg=SGA_CARD)
-        self.cmb_empresa = ttk.Combobox(quadro, values=DOC_LIB_EMPRESAS_ATEIE, state="readonly", width=24,
+        self.cmb_empresa = ttk.Combobox(quadro, values=DOC_LIB_EMPRESAS_SOLICITANTES_ATEIE, state="readonly", width=24,
                                         font=(SGA_FONTE, 10))
         self.cmb_empresa.pack(side=LEFT)
         self.cmb_empresa.bind("<<ComboboxSelected>>", self._ao_mudar_empresa)
@@ -14103,7 +14315,8 @@ class JanelaAteie:
         self._linha += 1
         bloco = Frame(card, bg=SGA_CARD)
         bloco.grid(row=self._linha, column=0, columnspan=2, sticky="ew", padx=12, pady=(2, 10))
-        self.lista_pessoal = LinhasDinamicasDocLib(self, bloco, DOC_LIB_COLUNAS_PESSOAL, DOC_LIB_LIMITE_PESSOAL)
+        self.lista_pessoal = LinhasDinamicasDocLib(self, bloco, DOC_LIB_COLUNAS_PESSOAL, DOC_LIB_LIMITE_PESSOAL,
+                                                   DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE)
         self._linha += 1
 
         self._montar_tabela()
@@ -14134,12 +14347,14 @@ class JanelaAteie:
               font=(SGA_FONTE, 11, "bold"), anchor="w").pack(fill=X, padx=16, pady=(12, 0))
         Label(quadro, text="Cada linha é um ATEIE. O número é atribuído quando a data e a hora de início e de "
                            "término programados estiverem preenchidas, e o status é automático: Em análise (salvo), "
-                           "Aprovada (documento gerado), Em Execução (colunas 6 a 9 preenchidas), Concluído "
-                           "(colunas 10 a 13 preenchidas) ou Cancelado. Depois de gerado o documento, somente as "
-                           "colunas 6 a 13 podem ser informadas; quando as quatro colunas de início (6 a 9) ou de "
-                           "término (10 a 13) estiverem preenchidas e salvas, não podem mais ser alteradas. A data da "
-                           "coluna 6 deve ser igual à da coluna 2, e a da coluna 10 não pode ser anterior à da coluna 4. "
-                           "Só é possível cancelar um ATEIE Em análise ou Aprovada. Duplo clique em uma data abre o "
+                           "Aprovada (documento gerado), Aprovado para Execução (documento gerado e De acordo "
+                           "preenchido), Em Execução (colunas 6 a 9 preenchidas), Concluído (colunas 10 a 13 "
+                           "preenchidas) ou Cancelado. Depois de gerado o documento o De acordo ainda pode ser "
+                           "preenchido, e as colunas 6 a 13 só são liberadas depois que o De acordo estiver "
+                           "preenchido e salvo; quando as quatro colunas de início (6 a 9) ou de término (10 a 13) "
+                           "estiverem preenchidas e salvas, não podem mais ser alteradas. A data da coluna 6 deve ser "
+                           "igual à da coluna 2, e a da coluna 10 não pode ser anterior à da coluna 4. Só é possível "
+                           "cancelar um ATEIE que ainda não entrou em execução. Duplo clique em uma data abre o "
                            "calendário.",
               bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9), anchor="w", justify="left", wraplength=1100
               ).pack(fill=X, padx=16, pady=(2, 8))
@@ -14149,7 +14364,7 @@ class JanelaAteie:
         tabela.grid_columnconfigure(0, minsize=86)
         for coluna in range(1, 13):
             tabela.grid_columnconfigure(coluna, weight=1, uniform="dados")
-        tabela.grid_columnconfigure(13, minsize=96)
+        tabela.grid_columnconfigure(13, minsize=130)
         tabela.grid_columnconfigure(14, minsize=84)
 
         cabecalho = dict(bg=SGA_AZUL, fg="white", font=(SGA_FONTE, 9, "bold"))
@@ -14191,7 +14406,8 @@ class JanelaAteie:
                     ToolTipSGA(entrada, "Dê duplo clique para abrir o calendário")
                 entradas.append(entrada)
             self.celulas.append(entradas)
-            situacao = Label(tabela, text="", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 8, "bold"))
+            situacao = Label(tabela, text="", bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 8, "bold"),
+                             wraplength=124, justify="center")
             situacao.grid(row=grade, column=13, sticky="nsew")
             self.lbl_status_linha.append(situacao)
             botao = doc_lib_criar_botao(tabela, "Cancelar", lambda i=indice: self.cancelar_intervencao(i), "perigo",
@@ -14563,18 +14779,25 @@ class JanelaAteie:
     # ------------------------------------------------------------------ estados
     def _aplicar_bloqueios(self):
         """Libera/trava cada campo conforme o estado do documento:
-          - novo ou em edição ........ tudo editável
+          - novo ou em edição ........ tudo editável (menos as colunas 6 a 13)
           - salvo (travado) .......... nada editável (Editar libera)
-          - EMITIDO (já gerado) ...... dados gerais e colunas 1 a 5 travados para sempre; colunas 6 a 13
-                                       editáveis nos ATEIE numerados e não cancelados, até que o grupo de início
-                                       (6 a 9) ou de término (10 a 13) esteja preenchido E salvo: daí em diante
-                                       esse grupo não muda mais
+          - EMITIDO (já gerado) ...... dados gerais e colunas 1 a 5 travados para sempre. O "De acordo" continua
+                                       aberto para novas linhas (as já registradas não mudam). As colunas 6 a 13
+                                       só são liberadas depois que o "De acordo" está preenchido e SALVO; a partir
+                                       daí ficam editáveis nos ATEIE numerados e não cancelados, até que o grupo
+                                       de início (6 a 9) ou de término (10 a 13) esteja preenchido E salvo (esse
+                                       grupo deixa de mudar)
         As colunas 6 a 13 só existem depois da emissão (antes dela ficam travadas).
         Linha de ATEIE cancelado nunca é editada."""
         geral = self.emitido or self.salvo
+        gravado = self._doc_gravado or {}
+        de_acordo_ok = doc_lib_de_acordo_completo(gravado.get("notificacoes"))
         for widget in self._controles:
             doc_lib_bloquear_widget(widget, geral)
-        self.lista_notificacoes.travar(geral)
+        if self.emitido:
+            self.lista_notificacoes.travar(False, fixas=len(gravado.get("notificacoes") or []))
+        else:
+            self.lista_notificacoes.travar(self.salvo)
         self.lista_pessoal.travar(geral)
         quantidade_programadas = len(DOC_LIB_CAMPOS_PROGRAMADOS)
         for indice, entradas in enumerate(self.celulas):
@@ -14589,7 +14812,7 @@ class JanelaAteie:
                 else:
                     grupo_salvo = estado["inicio_travado"] if posicao < quantidade_programadas + 4 \
                         else estado["termino_travado"]
-                    bloquear = cancelada or not numerada or grupo_salvo
+                    bloquear = cancelada or not numerada or not de_acordo_ok or grupo_salvo
                 doc_lib_bloquear_widget(entrada, bloquear)
 
     def _pendente(self):
@@ -14628,6 +14851,7 @@ class JanelaAteie:
             self._mostrar_erros(erros)
             return
         usuario = obter_nome_usuario_logado()
+        de_acordo_antes = doc_lib_de_acordo_completo((self._doc_gravado or {}).get("notificacoes"))
         travas_antes = {i: (e["inicio_travado"], e["termino_travado"]) for i, e in enumerate(self.estado_intervencoes)}
         provisorios = {i: e["numero"] for i, e in enumerate(self.estado_intervencoes) if e["provisorio"]}
         status_antes = {i: e["status"] for i, e in enumerate(self.estado_intervencoes) if e["numero"]}
@@ -14650,7 +14874,10 @@ class JanelaAteie:
         self._carregar_documento(doc)
 
         if ja_emitido:
-            mensagem = "Dados de execução salvos com sucesso!"
+            mensagem = "ATEIE atualizado com sucesso!"
+            if not de_acordo_antes and doc_lib_de_acordo_completo(doc["notificacoes"]):
+                mensagem += ("\n\n'De acordo' registrado: as colunas 6 a 13 foram liberadas para digitação "
+                             "(execução).")
             mudancas = [f"{self.estado_intervencoes[i]['numero']}: {status_antes[i]} passou a "
                         f"{self.estado_intervencoes[i]['status']}" for i in status_antes
                         if self.estado_intervencoes[i]["status"] != status_antes[i]]
