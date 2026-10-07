@@ -1,4 +1,4 @@
-# Código atualizado em 07-10-26 – 00:45h - (Click25: ATEIE - empresas, De acordo, Aprovado para Execução e lista com quebra de texto)
+# Código atualizado em 07-10-26 – 23:20h - (Click25: ATEIE - status Aguarda De Acordo, marca vermelha no PDF e caixa alta)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -11994,6 +11994,8 @@ DOC_LIB_EMPRESAS_SOLICITANTES_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "E
 DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "ENERGISA", "CTEEP", "CBA", "EQUATORIAL",
                                       "OUTRA"]         # combobox "Empresa" de "Pessoal Notificado"
 DOC_LIB_CLASSIFICACOES_ATEIE = ["Programado", "Urgência"]
+# campos do formulário sempre apresentados em caixa alta (tela, lista e PDF), qualquer que seja a digitação
+DOC_LIB_CAMPOS_CAIXA_ALTA = ("equipamento", "empresa", "empresa_outra", "local")
 DOC_LIB_LIMITE_NOTIFICACOES = 3        # linhas de "De acordo" (Pessoas/Áreas notificadas)
 DOC_LIB_LIMITE_PESSOAL = 3             # linhas de "Pessoal Notificado"
 DOC_LIB_LINHAS_INTERVENCOES = 10       # intervenções por documento ATEIE
@@ -12001,18 +12003,20 @@ DOC_LIB_LINHAS_INTERVENCOES = 10       # intervenções por documento ATEIE
 # Situação de cada ATEIE. Cada linha da tabela de intervenções é um ATEIE com número próprio e com status
 # próprio, calculado automaticamente por doc_lib_calcular_status e gravado na intervenção.
 STATUS_ATEIE_EM_ANALISE = "Em análise"
-STATUS_ATEIE_APROVADA = "Aprovada"
+# documento gerado, mas ainda sem o "De acordo" (antes da versão atual este status se chamava "Aprovada")
+STATUS_ATEIE_AGUARDA_DE_ACORDO = "Aguarda De Acordo"
+STATUS_ATEIE_APROVADA_ANTIGO = "Aprovada"
 STATUS_ATEIE_APROVADO_EXECUCAO = "Aprovado para Execução"
 STATUS_ATEIE_EM_EXECUCAO = "Em Execução"
 STATUS_ATEIE_CONCLUIDO = "Concluído"
 # ATEIE cancelado mantém o número (nunca reaproveitado) e fica registrado no documento
 STATUS_ATEIE_CANCELADO = "Cancelado"
-DOC_LIB_STATUS_ATEIE = [STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_APROVADO_EXECUCAO,
+DOC_LIB_STATUS_ATEIE = [STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_AGUARDA_DE_ACORDO, STATUS_ATEIE_APROVADO_EXECUCAO,
                         STATUS_ATEIE_EM_EXECUCAO, STATUS_ATEIE_CONCLUIDO, STATUS_ATEIE_CANCELADO]
-# Só é possível cancelar um ATEIE antes de entrar em execução ("Em análise", "Aprovada" ou "Aprovado para
+# Só é possível cancelar um ATEIE antes de entrar em execução ("Em análise", "Aguarda De Acordo" ou "Aprovado para
 # Execução"): em execução o ATEIE somente pode ser concluído (procedimento); concluído e cancelado também não
 # podem ser cancelados
-DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_APROVADA, STATUS_ATEIE_APROVADO_EXECUCAO)
+DOC_LIB_STATUS_CANCELAVEIS = (STATUS_ATEIE_EM_ANALISE, STATUS_ATEIE_AGUARDA_DE_ACORDO, STATUS_ATEIE_APROVADO_EXECUCAO)
 
 # Colunas 2 a 13 da tabela de intervenções: (campo no banco, cabeçalho, descrição, tipo)
 DOC_LIB_COLUNAS_INTERVENCAO = [
@@ -12253,11 +12257,8 @@ def _doc_lib_migrar_dados():
                            "(SELECT ateie_id FROM doclib_ateie_pdfs) LIMIT 1").fetchone()
             or any((empresa or "").strip() and empresa not in DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE
                    for (empresa,) in cur.execute("SELECT empresa FROM doclib_ateie_pessoal").fetchall())
-            or cur.execute("SELECT 1 FROM doclib_ateie_intervencoes i JOIN doclib_ateie a ON a.id = i.ateie_id "
-                           "WHERE a.emitido = 1 AND i.status = 'Aprovada' AND EXISTS (SELECT 1 FROM "
-                           "doclib_ateie_notificacoes n WHERE n.ateie_id = a.id AND TRIM(COALESCE(n.nome, '')) <> '' "
-                           "AND TRIM(COALESCE(n.data, '')) <> '' AND TRIM(COALESCE(n.hora, '')) <> '') "
-                           "LIMIT 1").fetchone()
+            or cur.execute("SELECT 1 FROM doclib_ateie_intervencoes WHERE status = ? LIMIT 1",
+                           (STATUS_ATEIE_APROVADA_ANTIGO,)).fetchone()
             or any(solicitado_por == login and nomes.get((login or "").lower())
                    for solicitado_por, login in cur.execute(
                        "SELECT solicitado_por, solicitado_por_usuario FROM doclib_ateie").fetchall()))
@@ -12302,7 +12303,10 @@ def _doc_lib_migrar_dados():
             item["status"] = STATUS_ATEIE_CANCELADO if item["status"] == "CANCELADA" else ""
             cursor.execute("UPDATE doclib_ateie_intervencoes SET status = ? WHERE id = ?",
                            (doc_lib_calcular_status(item, bool(item["emitido"])), item["id"]))
-        # "De acordo" já preenchido em documento emitido: Aprovada passa a Aprovado para Execução
+        # o status "Aprovada" passou a se chamar "Aguarda De Acordo" (ou "Aprovado para Execução", se o "De acordo"
+        # do documento emitido já estiver preenchido)
+        cursor.execute("UPDATE doclib_ateie_intervencoes SET status = ? WHERE status = ?",
+                       (STATUS_ATEIE_AGUARDA_DE_ACORDO, STATUS_ATEIE_APROVADA_ANTIGO))
         cursor.execute("SELECT id FROM doclib_ateie WHERE emitido = 1")
         for (ateie_id,) in cursor.fetchall():
             _doc_lib_recalcular_status(cursor, ateie_id, True)
@@ -12329,7 +12333,7 @@ def doc_lib_calcular_status(item, emitido, de_acordo=False):
       Concluído ................ documento gerado e colunas 10 a 13 (término efetivo) todas preenchidas
       Em Execução .............. documento gerado e colunas 6 a 9 (início efetivo) todas preenchidas
       Aprovado para Execução ... documento gerado e "De acordo" preenchido (nome, data e hora)
-      Aprovada ................. documento gerado, ainda sem o "De acordo"
+      Aguarda De Acordo ........ documento gerado, ainda sem o "De acordo"
     Preenchimento parcial das colunas 6 a 9 ou 10 a 13 não muda o status."""
     if item.get("status") == STATUS_ATEIE_CANCELADO:
         return STATUS_ATEIE_CANCELADO
@@ -12343,7 +12347,7 @@ def doc_lib_calcular_status(item, emitido, de_acordo=False):
         return STATUS_ATEIE_CONCLUIDO
     if completo(DOC_LIB_CAMPOS_INICIO):
         return STATUS_ATEIE_EM_EXECUCAO
-    return STATUS_ATEIE_APROVADO_EXECUCAO if de_acordo else STATUS_ATEIE_APROVADA
+    return STATUS_ATEIE_APROVADO_EXECUCAO if de_acordo else STATUS_ATEIE_AGUARDA_DE_ACORDO
 
 
 def _doc_lib_recalcular_status(cursor, ateie_id, emitido):
@@ -12450,7 +12454,10 @@ def doc_lib_diferencas_bloqueadas(atual, dados, emitido=True):
                         ("empresa", "Empresa Solicitante"), ("empresa_outra", "Empresa Solicitante (OUTRA)"),
                         ("local", "Local"), ("servicos", "Serviços a Executar"), ("observacoes", "Observações"),
                         ("documentos_vinculados", "Documentos Internos Vinculados"), ("nota", "Nota")):
-        if texto(atual.get(chave)) != texto(dados.get(chave)):
+        # Equipamento, Empresa e Local são sempre apresentados em caixa alta: documentos gravados antes dessa regra
+        # podem estar em maiúsculas e minúsculas, e mudar só a caixa não conta como alteração
+        comparar = str.upper if chave in DOC_LIB_CAMPOS_CAIXA_ALTA else str
+        if comparar(texto(atual.get(chave))) != comparar(texto(dados.get(chave))):
             diferencas.append(nome)
 
     def linhas_nao_vazias(linhas, chaves):
@@ -12683,7 +12690,7 @@ def doc_lib_listar_ateie():
 def doc_lib_cancelar_intervencao(ateie_id, ordem, usuario, justificativa, revisao_esperada):
     """Cancela SOMENTE o ATEIE (intervenção) indicado: os demais ATEIE do mesmo documento continuam com o
     status que tinham. O número cancelado fica registrado e nunca é reaproveitado. Só é possível cancelar um
-    ATEIE "Em análise" ou "Aprovada": em execução ele somente pode ser concluído, e concluído ou já cancelado
+    ATEIE "Em análise", "Aguarda De Acordo" ou "Aprovado para Execução": em execução ele somente pode ser concluído, e concluído ou já cancelado
     não cancela (ValueError). Devolve a nova revisão do documento."""
     agora_texto = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
     conexao = doc_lib_conectar(manual=True)
@@ -13042,9 +13049,11 @@ def doc_lib_gerar_pdf_ateie(doc, caminho, gerado_por=""):
 
     empresa = doc.get("empresa_outra") if doc.get("empresa") == "OUTRA" and doc.get("empresa_outra") \
         else doc.get("empresa")
-    campo_texto("2", "Equipamento de Interligação:", doc.get("equipamento"))
-    campo_texto("3", "Empresa Solicitante:", empresa)
-    campo_texto("4", "Local:", doc.get("local"))
+    # Equipamento de Interligação, Empresa Solicitante e Local saem sempre em caixa alta, como quer que tenham
+    # sido digitados
+    campo_texto("2", "Equipamento de Interligação:", (doc.get("equipamento") or "").upper())
+    campo_texto("3", "Empresa Solicitante:", (empresa or "").upper())
+    campo_texto("4", "Local:", (doc.get("local") or "").upper())
     campo_texto("5", "Serviços a Executar:", doc.get("servicos"))
     campo_texto("6", "Observação:", doc.get("observacoes"))
     campo_texto("7", "Documentos Internos Vinculados:", doc.get("documentos_vinculados"))
@@ -13199,6 +13208,14 @@ def doc_lib_gerar_pdf_ateie(doc, caminho, gerado_por=""):
     for posicao, (numero, texto) in enumerate(sub_rotulos):
         titulo_centralizado(xc[posicao + 1], xc[posicao + 2], y_sub + 3.6, numero, texto, 7.0)
 
+    # ATEIE gerado ainda sem o "De acordo" preenchido (e salvo): linha vermelha sobre as colunas 6 a 13 e o aviso
+    # abaixo da Nota. Ao gerar o documento de novo, com o "De acordo" já salvo, a marca deixa de aparecer.
+    de_acordo_pdf = doc_lib_de_acordo_completo(doc.get("notificacoes"))
+
+    def aguarda_de_acordo(item):
+        return bool(item.get("numero")) and \
+            doc_lib_calcular_status(item, True, de_acordo_pdf) == STATUS_ATEIE_AGUARDA_DE_ACORDO
+
     # linhas de dados
     y_linha = y_dados
     for indice, ordem in enumerate(range(1, DOC_LIB_LINHAS_INTERVENCOES + 1)):
@@ -13235,6 +13252,12 @@ def doc_lib_gerar_pdf_ateie(doc, caminho, gerado_por=""):
                 pdf.line(xc[0] + 1, y_linha + altura / 2, X1 - 1, y_linha + altura / 2)
                 pdf.set_draw_color(0, 0, 0)
                 pdf.set_line_width(0.2)
+            elif aguarda_de_acordo(item):                       # linha vermelha nas colunas 6 a 13
+                pdf.set_draw_color(176, 0, 0)
+                pdf.set_line_width(0.35)
+                pdf.line(xc[5] + 1, y_linha + altura / 2, X1 - 1, y_linha + altura / 2)
+                pdf.set_draw_color(0, 0, 0)
+                pdf.set_line_width(0.2)
             pdf.set_text_color(0, 0, 0)
         y_linha += altura
     estado["y"] = y_fim_t
@@ -13259,8 +13282,19 @@ def doc_lib_gerar_pdf_ateie(doc, caminho, gerado_por=""):
             pdf.set_font("DejaVuC", "", 9.0)
         pdf.text(x_nota, y_atual, linha)
         y_atual += 4.0
-    if canceladas:
+    aguardando = any(aguarda_de_acordo(item) for item in intervencoes)
+    if aguardando:
         y_atual += 1.5 if linhas_nota else 5.0
+        if y_atual + 3.0 > PDFAteie.Y_MAXIMO:
+            nova_pagina()
+            y_atual = estado["y"] + 3.6
+        pdf.set_font("DejaVuC", "B", 8.5)
+        pdf.set_text_color(176, 0, 0)
+        pdf.text(X0 + 1.0, y_atual, "Aguardando o De Acordo do documento")
+        y_atual += 4.0
+        pdf.set_text_color(0, 0, 0)
+    if canceladas:
+        y_atual += 1.5 if (linhas_nota or aguardando) else 5.0
         if y_atual + 3.0 > PDFAteie.Y_MAXIMO:
             nova_pagina()
             y_atual = estado["y"] + 3.6
@@ -13311,7 +13345,8 @@ def doc_lib_pasta_destino(tipo, ano):
 
 def doc_lib_registrar_geracao(doc, caminho, usuario):
     """Registra o PDF gerado e, na PRIMEIRA geração, EMITE o ATEIE: o documento passa a ser protegido (somente as
-    colunas 6 a 13 continuam editáveis) e cada ATEIE não cancelado passa a "Aprovada". Lança DocLibConflito se o
+    colunas 6 a 13 continuam editáveis) e cada ATEIE não cancelado passa a "Aguarda De Acordo" (ou "Aprovado para Execução", se o "De acordo" já
+    estiver preenchido). Lança DocLibConflito se o
     documento mudou desde que foi lido. Devolve a revisão atual do documento."""
     agora_texto = datetime.now().strftime("%d/%m/%Y - %H:%Mh")
     conexao = doc_lib_conectar(manual=True)
@@ -13385,7 +13420,7 @@ def doc_lib_imprimir_pdf(caminho):
 # COMPONENTES VISUAIS DO DOC_LIB. (reaproveitam os componentes do SGA: mesmas cores e fonte)
 # ---------------------------------------------------
 # Cor do texto de cada status do ATEIE (mesma paleta do SGA)
-DOC_LIB_COR_STATUS = {STATUS_ATEIE_EM_ANALISE: "#CC8400", STATUS_ATEIE_APROVADA: SGA_AZUL,
+DOC_LIB_COR_STATUS = {STATUS_ATEIE_EM_ANALISE: "#CC8400", STATUS_ATEIE_AGUARDA_DE_ACORDO: SGA_AZUL,
                       STATUS_ATEIE_APROVADO_EXECUCAO: "#0E7490", STATUS_ATEIE_EM_EXECUCAO: "#5E35B1", STATUS_ATEIE_CONCLUIDO: SGA_VERDE,
                       STATUS_ATEIE_CANCELADO: SGA_VERMELHO}
 DOC_LIB_COR_BLOQUEADO = "#EEF1F6"
@@ -13920,10 +13955,11 @@ def doc_lib_escolher_ateie(parent):
     return janela.resultado
 
 
-def doc_lib_dialogo_documento_gerado(parent, caminho, aviso=None):
+def doc_lib_dialogo_documento_gerado(parent, caminho, aviso=None, lembrete=None):
     """Janela exibida logo após gerar o documento: mostra onde ele foi arquivado e já oferece
-    abrir o PDF e imprimir."""
-    altura = 300 + (90 if aviso else 0)
+    abrir o PDF e imprimir. aviso: problema com a pasta de arquivamento; lembrete: orientação sobre o documento."""
+    extra = (90 if aviso else 0) + (80 if lembrete else 0)
+    altura = 300 + extra
     janela = Toplevel(parent)
     janela.title("Documento gerado")
     janela.geometry(f"660x{altura}")
@@ -13931,7 +13967,7 @@ def doc_lib_dialogo_documento_gerado(parent, caminho, aviso=None):
     janela.transient(parent)
     ui_dialogo(janela, "Documento gerado e arquivado", "O PDF permanece arquivado por tempo indeterminado")
 
-    cartao = ui_cartao(janela, 84, 96 + (90 if aviso else 0))
+    cartao = ui_cartao(janela, 84, 96 + extra)
     Label(cartao, text="Arquivo:", bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9, "bold")
           ).place(x=20, y=14)
     Label(cartao, text=caminho, bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 10), wraplength=580,
@@ -13939,6 +13975,9 @@ def doc_lib_dialogo_documento_gerado(parent, caminho, aviso=None):
     if aviso:
         Label(cartao, text=aviso, bg=SGA_CARD, fg=SGA_VERMELHO, font=(SGA_FONTE, 9), wraplength=580,
               justify="left", anchor="w").place(x=20, y=96)
+    if lembrete:
+        Label(cartao, text=lembrete, bg=SGA_CARD, fg=SGA_TEXTO, font=(SGA_FONTE, 9, "bold"), wraplength=580,
+              justify="left", anchor="w").place(x=20, y=96 + (90 if aviso else 0))
 
     def abrir():
         try:
@@ -14260,7 +14299,7 @@ class JanelaAteie:
         self._alvos["classificacao"] = (None, rot)
 
         # 2. Equipamento de Interligação / 4. Local / 5. Serviços / 6. Observações / 7. Documentos
-        self.txt_equipamento = self._campo_texto("equipamento", "Equipamento de Interligação", 3)
+        self.txt_equipamento = self._campo_texto("equipamento", "Equipamento de Interligação", 3, maiusculas=True)
 
         # 3. Empresa Solicitante (+ nome manual quando OUTRA)
         rot = self._rotulo("Empresa Solicitante")
@@ -14274,12 +14313,13 @@ class JanelaAteie:
                                        font=(SGA_FONTE, 10, "bold"))
         self.ent_empresa_outra = criar_entrada_sga(quadro, width=34)
         self.configurar_entrada(self.ent_empresa_outra, "texto")
+        self.forcar_maiusculas(self.ent_empresa_outra)
         self._controles += [self.cmb_empresa, self.ent_empresa_outra]
         self._nova_linha(rot, quadro)
         self._alvos["empresa"] = (self.cmb_empresa, rot)
         self._alvos["empresa_outra"] = (self.ent_empresa_outra, rot)
 
-        self.txt_local = self._campo_texto("local", "Local", 3)
+        self.txt_local = self._campo_texto("local", "Local", 3, maiusculas=True)
         self.txt_servicos = self._campo_texto("servicos", "Serviços a Executar", 6, barra=True)
         self.txt_observacoes = self._campo_texto("observacoes", "Observações", 4, barra=True, opcional=True)
         self.txt_documentos = self._campo_texto("documentos_vinculados", "Documentos Internos Vinculados", 2,
@@ -14347,7 +14387,7 @@ class JanelaAteie:
               font=(SGA_FONTE, 11, "bold"), anchor="w").pack(fill=X, padx=16, pady=(12, 0))
         Label(quadro, text="Cada linha é um ATEIE. O número é atribuído quando a data e a hora de início e de "
                            "término programados estiverem preenchidas, e o status é automático: Em análise (salvo), "
-                           "Aprovada (documento gerado), Aprovado para Execução (documento gerado e De acordo "
+                           "Aguarda De Acordo (documento gerado), Aprovado para Execução (documento gerado e De acordo "
                            "preenchido), Em Execução (colunas 6 a 9 preenchidas), Concluído (colunas 10 a 13 "
                            "preenchidas) ou Cancelado. Depois de gerado o documento o De acordo ainda pode ser "
                            "preenchido, e as colunas 6 a 13 só são liberadas depois que o De acordo estiver "
@@ -14432,8 +14472,34 @@ class JanelaAteie:
         Frame(self.card, bg="#E5EAF1", height=1).grid(row=self._linha, column=0, columnspan=2, sticky="ew")
         self._linha += 1
 
-    def _campo_texto(self, chave, nome, linhas, barra=False, opcional=False, separador=True):
-        """Linha com rótulo + campo de texto livre de várias linhas."""
+    @staticmethod
+    def forcar_maiusculas(widget):
+        """O que for digitado ou colado no campo passa para caixa alta na hora (o cursor não sai do lugar)."""
+        def converter(evento=None):
+            try:
+                if str(widget.cget("state")) != "normal":
+                    return
+                texto = widget.winfo_class() == "Text"
+                atual = widget.get("1.0", "end-1c") if texto else widget.get()
+                novo = atual.upper()
+                if novo == atual:
+                    return
+                posicao = widget.index(INSERT)
+                if texto:
+                    widget.delete("1.0", END)
+                    widget.insert("1.0", novo)
+                    widget.mark_set(INSERT, posicao)
+                else:
+                    widget.delete(0, END)
+                    widget.insert(0, novo)
+                    widget.icursor(posicao)
+            except TclError:
+                pass
+        widget.bind("<KeyRelease>", converter, add="+")
+        widget.bind("<<Paste>>", lambda e: widget.after_idle(converter), add="+")
+
+    def _campo_texto(self, chave, nome, linhas, barra=False, opcional=False, separador=True, maiusculas=False):
+        """Linha com rótulo + campo de texto livre de várias linhas (maiusculas: converte a digitação para caixa alta)."""
         rotulo = self._rotulo(nome, opcional)
         quadro = Frame(self.card, bg=SGA_CARD)
         texto = criar_area_texto_sga(quadro, wrap=WORD, height=linhas)
@@ -14451,6 +14517,8 @@ class JanelaAteie:
         texto.bind("<MouseWheel>", self._roda_texto)
         texto.bind("<Key>", lambda e, w=texto: self._limpar_marca(w), add="+")
         texto.bind("<FocusOut>", lambda e, w=texto: self._limpar_marca(w) if self._texto(w) else None, add="+")
+        if maiusculas:
+            self.forcar_maiusculas(texto)
         self._controles.append(texto)
         self._alvos[chave] = (texto, rotulo)
         self._nova_linha(rotulo, quadro, separador)
@@ -14670,7 +14738,7 @@ class JanelaAteie:
         self._atualizar_botoes_cancelar()
 
     def _atualizar_botoes_cancelar(self):
-        """Cancelar só vale para ATEIE já numerado e ainda cancelável (Em análise, Aprovada ou Em Execução), com
+        """Cancelar só vale para ATEIE já numerado e ainda cancelável (Em análise, Aguarda De Acordo ou Aprovado para Execução), com
         o documento sem alterações pendentes."""
         permitido = self.ateie_id is not None and not self._pendente()
         for indice, estado in enumerate(self.estado_intervencoes):
@@ -14744,12 +14812,13 @@ class JanelaAteie:
         for widget, chave in ((self.txt_equipamento, "equipamento"), (self.txt_local, "local"),
                               (self.txt_servicos, "servicos"), (self.txt_observacoes, "observacoes"),
                               (self.txt_documentos, "documentos_vinculados"), (self.txt_nota, "nota")):
-            self._definir_texto(widget, doc.get(chave))
+            valor = doc.get(chave)
+            self._definir_texto(widget, (valor or "").upper() if chave in DOC_LIB_CAMPOS_CAIXA_ALTA else valor)
         estado_combo = str(self.cmb_empresa.cget("state"))
         self.cmb_empresa.configure(state="readonly")
         self.cmb_empresa.set(doc["empresa"])
         self.cmb_empresa.configure(state=estado_combo)
-        doc_lib_definir_entrada(self.ent_empresa_outra, doc.get("empresa_outra") or "")
+        doc_lib_definir_entrada(self.ent_empresa_outra, (doc.get("empresa_outra") or "").upper())
         self._ao_mudar_empresa()
         self.lista_notificacoes.preencher(doc["notificacoes"])
         self.lista_pessoal.preencher(doc["pessoal"])
@@ -14877,7 +14946,8 @@ class JanelaAteie:
             mensagem = "ATEIE atualizado com sucesso!"
             if not de_acordo_antes and doc_lib_de_acordo_completo(doc["notificacoes"]):
                 mensagem += ("\n\n'De acordo' registrado: as colunas 6 a 13 foram liberadas para digitação "
-                             "(execução).")
+                             "(execução).\n\nGere o documento novamente: o novo PDF não traz mais a linha vermelha "
+                             "nem o aviso 'Aguardando o De Acordo do documento'.")
             mudancas = [f"{self.estado_intervencoes[i]['numero']}: {status_antes[i]} passou a "
                         f"{self.estado_intervencoes[i]['status']}" for i in status_antes
                         if self.estado_intervencoes[i]["status"] != status_antes[i]]
@@ -14913,7 +14983,7 @@ class JanelaAteie:
 
     def gerar(self):
         """Gera o PDF a partir da versão salva (revalida antes), arquiva e oferece abrir/imprimir. A primeira
-        geração EMITE o ATEIE: status "Aprovada" e proteção dos dados (só as colunas 6 a 13 seguem editáveis)."""
+        geração EMITE o ATEIE: status "Aguarda De Acordo" e proteção dos dados (só as colunas 6 a 13 seguem editáveis)."""
         if self.ateie_id is None or self._pendente():
             messagebox.showwarning("Atenção", "Salve o ATEIE antes de gerar o documento.", parent=self.janela)
             return
@@ -14936,7 +15006,7 @@ class JanelaAteie:
             return
         if not self.emitido and not messagebox.askyesno(
                 "Emitir ATEIE",
-                "Ao gerar o documento o ATEIE será considerado EMITIDO (status 'Aprovada').\n\n"
+                "Ao gerar o documento o ATEIE será considerado EMITIDO (status 'Aguarda De Acordo').\n\n"
                 "A partir daí os dados gerais e as colunas 1 a 5 da tabela não poderão mais ser alterados; "
                 "somente as colunas 6 a 13 (execução e normalização) continuarão editáveis.\n\n"
                 "Deseja gerar o documento?", parent=self.janela):
@@ -14949,8 +15019,14 @@ class JanelaAteie:
         except Exception as erro:
             messagebox.showerror("Erro", f"Falha ao gerar/arquivar o documento ATEIE: {erro}", parent=self.janela)
             return
-        self._carregar_documento(doc_lib_carregar_ateie(self.ateie_id))
-        doc_lib_dialogo_documento_gerado(self.janela, caminho, aviso)
+        doc = doc_lib_carregar_ateie(self.ateie_id)
+        self._carregar_documento(doc)
+        lembrete = None
+        if any(item.get("status") == STATUS_ATEIE_AGUARDA_DE_ACORDO for item in doc["intervencoes"]):
+            lembrete = ("Status: Aguarda De Acordo. O PDF traz uma linha vermelha nas colunas 6 a 13 e o aviso "
+                        "'Aguardando o De Acordo do documento'. Preencha e salve o 'De acordo' e gere o documento "
+                        "novamente: a marca sai e as colunas 6 a 13 são liberadas para a execução.")
+        doc_lib_dialogo_documento_gerado(self.janela, caminho, aviso, lembrete)
 
     def cancelar_intervencao(self, indice):
         """Cancela somente o ATEIE da linha; os demais ATEIE do documento mantêm o seu status."""
