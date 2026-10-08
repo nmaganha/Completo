@@ -1,4 +1,4 @@
-# Código atualizado em 07-10-26 – 23:20h - (Click25: ATEIE - status Aguarda De Acordo, marca vermelha no PDF e caixa alta)
+# Código atualizado em 08-10-26 – 00:33h - (Click25: ATEIE - Observações padrão obrigatória e dica sob Equipamento de Interligação)
 import sqlite3
 from tkinter import *
 # from tkinter import ttk, messagebox
@@ -11994,6 +11994,11 @@ DOC_LIB_EMPRESAS_SOLICITANTES_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "E
 DOC_LIB_EMPRESAS_NOTIFICADAS_ATEIE = ["AXIA", "EDP", "ENGIE", "CELEO_REDES", "ENERGISA", "CTEEP", "CBA", "EQUATORIAL",
                                       "OUTRA"]         # combobox "Empresa" de "Pessoal Notificado"
 DOC_LIB_CLASSIFICACOES_ATEIE = ["Programado", "Urgência"]
+# Texto padrão do campo "Observações": obrigatório em todos os documentos (entra já preenchido no formulário)
+DOC_LIB_TEXTO_PADRAO_OBSERVACOES = (
+    "Bloquear ou manter bloqueado o religamento automático de todos os disjuntores que alimentam os "
+    "equipamentos de interligação sob intervenção, condicionando qualquer religamento manual ao prévio contato "
+    "e à autorização deste COG.")
 # campos do formulário sempre apresentados em caixa alta (tela, lista e PDF), qualquer que seja a digitação
 DOC_LIB_CAMPOS_CAIXA_ALTA = ("equipamento", "empresa", "empresa_outra", "local")
 DOC_LIB_LIMITE_NOTIFICACOES = 3        # linhas de "De acordo" (Pessoas/Áreas notificadas)
@@ -12259,6 +12264,8 @@ def _doc_lib_migrar_dados():
                    for (empresa,) in cur.execute("SELECT empresa FROM doclib_ateie_pessoal").fetchall())
             or cur.execute("SELECT 1 FROM doclib_ateie_intervencoes WHERE status = ? LIMIT 1",
                            (STATUS_ATEIE_APROVADA_ANTIGO,)).fetchone()
+            or cur.execute("SELECT 1 FROM doclib_ateie WHERE observacoes IS NULL OR TRIM(observacoes) = '' "
+                           "LIMIT 1").fetchone()
             or any(solicitado_por == login and nomes.get((login or "").lower())
                    for solicitado_por, login in cur.execute(
                        "SELECT solicitado_por, solicitado_por_usuario FROM doclib_ateie").fetchall()))
@@ -12279,6 +12286,9 @@ def _doc_lib_migrar_dados():
             nome = nomes.get((login or "").lower())
             if nome and solicitado_por == login:
                 cursor.execute("UPDATE doclib_ateie SET solicitado_por = ? WHERE id = ?", (nome, ateie_id))
+        # Observações passou a ser obrigatória, com o texto padrão: documentos antigos sem texto recebem o padrão
+        cursor.execute("UPDATE doclib_ateie SET observacoes = ? WHERE observacoes IS NULL OR TRIM(observacoes) = ''",
+                       (DOC_LIB_TEXTO_PADRAO_OBSERVACOES,))
         # documento que já teve PDF gerado é considerado emitido
         cursor.execute("UPDATE doclib_ateie SET emitido = 1 WHERE emitido = 0 AND id IN "
                        "(SELECT ateie_id FROM doclib_ateie_pdfs)")
@@ -12771,7 +12781,8 @@ def doc_lib_validar_ateie(dados, atual=None):
     (quando já existe): execução já gravada e inalterada não é revalidada nas regras de data.
 
     Retorna uma lista de (chaves_dos_campos, mensagem); lista vazia = documento válido.
-    Opcionais: De acordo, Observações, Documentos Internos Vinculados e Nota. Na tabela de intervenções são
+    Opcionais: De acordo, Documentos Internos Vinculados e Nota. Observações é obrigatório (documento ainda não
+    emitido). Na tabela de intervenções são
     obrigatórios os 4 campos programados de cada intervenção usada (pelo menos uma); as colunas
     de execução (Verificado) são preenchidas à medida que o serviço acontece e, se informadas,
     precisam estar corretas."""
@@ -12792,6 +12803,8 @@ def doc_lib_validar_ateie(dados, atual=None):
         erros.append((("local",), "Local: preencha o campo."))
     if vazio(dados.get("servicos")):
         erros.append((("servicos",), "Serviços a Executar: preencha o campo."))
+    if vazio(dados.get("observacoes")) and not (atual or {}).get("emitido"):     # documento emitido não muda mais
+        erros.append((("observacoes",), "Observações: preencha o campo."))
     if vazio(dados.get("solicitado_por")) or vazio(dados.get("data_preenchimento")) \
             or vazio(dados.get("hora_preenchimento")):
         erros.append((("solicitado_por",), "Solicitado por: usuário, data ou hora não identificados "
@@ -13055,7 +13068,7 @@ def doc_lib_gerar_pdf_ateie(doc, caminho, gerado_por=""):
     campo_texto("3", "Empresa Solicitante:", (empresa or "").upper())
     campo_texto("4", "Local:", (doc.get("local") or "").upper())
     campo_texto("5", "Serviços a Executar:", doc.get("servicos"))
-    campo_texto("6", "Observação:", doc.get("observacoes"))
+    campo_texto("6", "Observação:", doc.get("observacoes") or DOC_LIB_TEXTO_PADRAO_OBSERVACOES)
     campo_texto("7", "Documentos Internos Vinculados:", doc.get("documentos_vinculados"))
 
     # ---- 8 a 12: Solicitado por / Data / Hora / Visto Responsável / De Acordo --------------------
@@ -14299,7 +14312,8 @@ class JanelaAteie:
         self._alvos["classificacao"] = (None, rot)
 
         # 2. Equipamento de Interligação / 4. Local / 5. Serviços / 6. Observações / 7. Documentos
-        self.txt_equipamento = self._campo_texto("equipamento", "Equipamento de Interligação", 3, maiusculas=True)
+        self.txt_equipamento = self._campo_texto("equipamento", "Equipamento de Interligação", 3, maiusculas=True,
+                                                 dica="(não usar siglas)")
 
         # 3. Empresa Solicitante (+ nome manual quando OUTRA)
         rot = self._rotulo("Empresa Solicitante")
@@ -14321,7 +14335,8 @@ class JanelaAteie:
 
         self.txt_local = self._campo_texto("local", "Local", 3, maiusculas=True)
         self.txt_servicos = self._campo_texto("servicos", "Serviços a Executar", 6, barra=True)
-        self.txt_observacoes = self._campo_texto("observacoes", "Observações", 4, barra=True, opcional=True)
+        self.txt_observacoes = self._campo_texto("observacoes", "Observações", 4, barra=True)
+        self._definir_texto(self.txt_observacoes, DOC_LIB_TEXTO_PADRAO_OBSERVACOES)     # obrigatório, já preenchido
         self.txt_documentos = self._campo_texto("documentos_vinculados", "Documentos Internos Vinculados", 2,
                                                 opcional=True)
 
@@ -14457,9 +14472,9 @@ class JanelaAteie:
             doc_lib_estado_botao(botao, False)
 
     # ------------------------------------------------------------------ construção de linhas do formulário
-    def _rotulo(self, texto, opcional=False):
-        return Label(self.card, text=texto + (" (opcional)" if opcional else ""), bg=SGA_CARD, fg=SGA_TEXTO_SUAVE,
-                     font=(SGA_FONTE, 10, "bold"), anchor="nw", justify="left", wraplength=225)
+    def _rotulo(self, texto, opcional=False, pai=None):
+        return Label(pai or self.card, text=texto + (" (opcional)" if opcional else ""), bg=SGA_CARD,
+                     fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 10, "bold"), anchor="nw", justify="left", wraplength=225)
 
     def _nova_linha(self, rotulo, conteudo, separador=True):
         rotulo.grid(row=self._linha, column=0, sticky="nw", padx=(16, 8), pady=(12, 8))
@@ -14498,9 +14513,19 @@ class JanelaAteie:
         widget.bind("<KeyRelease>", converter, add="+")
         widget.bind("<<Paste>>", lambda e: widget.after_idle(converter), add="+")
 
-    def _campo_texto(self, chave, nome, linhas, barra=False, opcional=False, separador=True, maiusculas=False):
-        """Linha com rótulo + campo de texto livre de várias linhas (maiusculas: converte a digitação para caixa alta)."""
-        rotulo = self._rotulo(nome, opcional)
+    def _campo_texto(self, chave, nome, linhas, barra=False, opcional=False, separador=True, maiusculas=False,
+                     dica=None):
+        """Linha com rótulo + campo de texto livre de várias linhas (maiusculas: converte a digitação para caixa
+        alta; dica: orientação em fonte 9, sob o nome do campo)."""
+        bloco = None
+        if dica:
+            bloco = Frame(self.card, bg=SGA_CARD)
+            rotulo = self._rotulo(nome, opcional, pai=bloco)
+            rotulo.pack(anchor="nw")
+            Label(bloco, text=dica, bg=SGA_CARD, fg=SGA_TEXTO_SUAVE, font=(SGA_FONTE, 9), anchor="w",
+                  justify="left").pack(anchor="nw", pady=(2, 0))
+        else:
+            rotulo = self._rotulo(nome, opcional)
         quadro = Frame(self.card, bg=SGA_CARD)
         texto = criar_area_texto_sga(quadro, wrap=WORD, height=linhas)
         if barra:
@@ -14521,7 +14546,7 @@ class JanelaAteie:
             self.forcar_maiusculas(texto)
         self._controles.append(texto)
         self._alvos[chave] = (texto, rotulo)
-        self._nova_linha(rotulo, quadro, separador)
+        self._nova_linha(bloco or rotulo, quadro, separador)
         return texto
 
     def _par_automatico(self, pai, titulo, valor, espaco):
